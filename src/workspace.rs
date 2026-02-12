@@ -1,11 +1,12 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use console::Style;
+use anyhow::{bail, Context, Result};
 use dialoguer::Confirm;
 use serde::{Deserialize, Serialize};
 
 use crate::config;
+use crate::styles::Styles;
 
 const WORKSPACE_FILE: &str = "buona.workspace.json";
 
@@ -15,73 +16,69 @@ pub struct WorkspaceMeta {
 }
 
 /// Read workspace metadata from a directory, if a `buona.workspace.json` exists.
-pub fn read_meta(dir: &PathBuf) -> Option<WorkspaceMeta> {
+pub fn read_meta(dir: &Path) -> Option<WorkspaceMeta> {
     let path = dir.join(WORKSPACE_FILE);
     let contents = fs::read_to_string(&path).ok()?;
     serde_json::from_str(&contents).ok()
 }
 
 /// Find a workspace by name or directory name. Returns the resolved path.
-fn find_workspace(query: &str) -> Option<PathBuf> {
-    let workspace_dir = config::workspace_dir();
+fn find_workspace(query: &str) -> Result<PathBuf> {
+    let workspace_dir = config::workspace_dir()?;
 
     // First, try as a direct directory name
     let direct = workspace_dir.join(query);
     if direct.is_dir() && read_meta(&direct).is_some() {
-        return Some(direct);
+        return Ok(direct);
     }
 
     // Otherwise, search by workspace name in metadata
-    let entries = fs::read_dir(&workspace_dir).ok()?;
-    for entry in entries.flatten() {
-        if entry.file_type().ok()?.is_dir() {
+    let entries = fs::read_dir(&workspace_dir)
+        .with_context(|| {
+            format!(
+                "could not read workspace directory: {}",
+                workspace_dir.display()
+            )
+        })?;
+
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
             let path = entry.path();
             if let Some(meta) = read_meta(&path) {
                 if meta.name == query {
-                    return Some(path);
+                    return Ok(path);
                 }
             }
         }
     }
 
-    None
+    bail!("no workspace found matching \"{query}\"")
 }
 
 /// List all workspaces (directories) found in the configured workspace directory.
-pub fn list() {
-    let workspace_dir = config::workspace_dir();
-    let bold = Style::new().bold();
-    let dim = Style::new().dim();
-    let cyan = Style::new().cyan().bold();
+pub fn list() -> Result<()> {
+    let workspace_dir = config::workspace_dir()?;
+    let s = Styles::default();
 
     println!();
-    println!("  {}", bold.apply_to("Workspaces"));
-    println!("  {}", dim.apply_to("──────────"));
+    println!("  {}", s.bold.apply_to("Workspaces"));
+    println!("  {}", s.dim.apply_to("──────────"));
 
     if !workspace_dir.exists() {
-        eprintln!(
-            "  Workspace directory does not exist: {}",
-            workspace_dir.display()
+        bail!(
+            "workspace directory does not exist: {}\n  Run {} to configure it.",
+            workspace_dir.display(),
+            "buona config setup",
         );
-        eprintln!(
-            "  Run {} to configure it.",
-            bold.apply_to("buona config --setup")
-        );
-        println!();
-        std::process::exit(1);
     }
 
-    let entries = match fs::read_dir(&workspace_dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            eprintln!(
-                "  Could not read workspace directory {}: {e}",
-                workspace_dir.display()
-            );
-            println!();
-            std::process::exit(1);
-        }
-    };
+    let entries = fs::read_dir(&workspace_dir).with_context(|| {
+        format!(
+            "could not read workspace directory: {}",
+            workspace_dir.display()
+        )
+    })?;
 
     let mut workspaces: Vec<(String, WorkspaceMeta)> = entries
         .filter_map(|entry| {
@@ -101,7 +98,7 @@ pub fn list() {
     if workspaces.is_empty() {
         println!(
             "  {}",
-            dim.apply_to(format!(
+            s.dim.apply_to(format!(
                 "No workspaces found in {}",
                 workspace_dir.display()
             ))
@@ -109,7 +106,7 @@ pub fn list() {
     } else {
         println!(
             "  {}  {}",
-            dim.apply_to("Directory:"),
+            s.dim.apply_to("Directory:"),
             workspace_dir.display()
         );
         println!();
@@ -117,109 +114,84 @@ pub fn list() {
             if meta.name != *dir_name {
                 println!(
                     "  {}  {} {}",
-                    cyan.apply_to("•"),
+                    s.cyan.apply_to("•"),
                     meta.name,
-                    dim.apply_to(format!("({dir_name})"))
+                    s.dim.apply_to(format!("({dir_name})"))
                 );
             } else {
-                println!("  {}  {dir_name}", cyan.apply_to("•"));
+                println!("  {}  {dir_name}", s.cyan.apply_to("•"));
             }
         }
     }
 
     println!();
+    Ok(())
 }
 
 /// Create a new workspace directory. Writes a `buona.workspace.json` marker
 /// file with the workspace name. If `name` is not provided, the directory name
 /// is used.
-pub fn create(path: &str, name: Option<&str>) {
-    let bold = Style::new().bold();
-    let dim = Style::new().dim();
-    let green = Style::new().green().bold();
+pub fn create(path: &str, name: Option<&str>) -> Result<()> {
+    let s = Styles::default();
 
     // Resolve the target directory
     let target: PathBuf = if PathBuf::from(path).is_absolute() {
         PathBuf::from(path)
     } else {
-        config::workspace_dir().join(path)
+        config::workspace_dir()?.join(path)
     };
 
     // Derive the workspace name
-    let ws_name = name
-        .map(String::from)
-        .unwrap_or_else(|| {
-            target
-                .file_name()
-                .expect("Could not determine directory name from path")
-                .to_string_lossy()
-                .into_owned()
-        });
+    let ws_name = match name {
+        Some(n) => n.to_string(),
+        None => target
+            .file_name()
+            .context("could not determine directory name from path")?
+            .to_string_lossy()
+            .into_owned(),
+    };
 
     if target.exists() {
-        eprintln!(
-            "  Directory already exists: {}",
-            target.display()
-        );
-        std::process::exit(1);
+        bail!("directory already exists: {}", target.display());
     }
 
     // Create the workspace directory (and any parent directories)
-    if let Err(e) = fs::create_dir_all(&target) {
-        eprintln!(
-            "  Could not create workspace directory {}: {e}",
+    fs::create_dir_all(&target).with_context(|| {
+        format!(
+            "could not create workspace directory: {}",
             target.display()
-        );
-        std::process::exit(1);
-    }
+        )
+    })?;
 
     // Write the workspace metadata file
-    let meta = WorkspaceMeta { name: ws_name.clone() };
+    let meta = WorkspaceMeta { name: ws_name };
     let meta_path = target.join(WORKSPACE_FILE);
-    match serde_json::to_string_pretty(&meta) {
-        Ok(json) => {
-            if let Err(e) = fs::write(&meta_path, json + "\n") {
-                eprintln!("  Warning: Could not write {WORKSPACE_FILE}: {e}");
-            }
-        }
-        Err(e) => {
-            eprintln!("  Warning: Could not serialize workspace metadata: {e}");
-        }
-    }
+    let json = serde_json::to_string_pretty(&meta)?;
+    fs::write(&meta_path, json + "\n")
+        .with_context(|| format!("could not write {WORKSPACE_FILE}"))?;
 
     println!();
     println!(
         "  {} Created workspace {}",
-        green.apply_to("✔"),
-        bold.apply_to(&ws_name)
+        s.green.apply_to("✔"),
+        s.bold.apply_to(&meta.name)
     );
     println!(
         "  {}  {}",
-        dim.apply_to("Location:"),
+        s.dim.apply_to("Location:"),
         target.display()
     );
     println!();
+
+    Ok(())
 }
 
 /// Remove a workspace by name or directory name. Prompts for confirmation
 /// unless `force` is true.
-pub fn remove(query: &str, force: bool) {
-    let bold = Style::new().bold();
-    let dim = Style::new().dim();
-    let green = Style::new().green().bold();
-    let red = Style::new().red().bold();
+pub fn remove(query: &str, force: bool) -> Result<()> {
+    let s = Styles::default();
 
-    let target = match find_workspace(query) {
-        Some(path) => path,
-        None => {
-            eprintln!(
-                "  {} No workspace found matching \"{}\"",
-                red.apply_to("✗"),
-                query
-            );
-            std::process::exit(1);
-        }
-    };
+    let target = find_workspace(query)?;
 
     let meta = read_meta(&target);
     let display_name = meta
@@ -232,34 +204,71 @@ pub fn remove(query: &str, force: bool) {
         let confirmed = Confirm::new()
             .with_prompt(format!(
                 "  Remove workspace {} at {}?",
-                bold.apply_to(display_name),
-                dim.apply_to(target.display().to_string())
+                s.bold.apply_to(display_name),
+                s.dim.apply_to(target.display().to_string())
             ))
             .default(false)
             .interact()
-            .expect("Failed to read input");
+            .context("failed to read input")?;
 
         if !confirmed {
             println!("  Aborted.");
             println!();
-            return;
+            return Ok(());
         }
     }
 
-    if let Err(e) = fs::remove_dir_all(&target) {
-        eprintln!(
-            "  {} Could not remove workspace directory {}: {e}",
-            red.apply_to("✗"),
+    fs::remove_dir_all(&target).with_context(|| {
+        format!(
+            "could not remove workspace directory: {}",
             target.display()
-        );
-        std::process::exit(1);
-    }
+        )
+    })?;
 
     println!();
     println!(
         "  {} Removed workspace {}",
-        green.apply_to("✔"),
-        bold.apply_to(display_name)
+        s.green.apply_to("✔"),
+        s.bold.apply_to(display_name)
     );
     println!();
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn workspace_meta_round_trips_through_serde() {
+        let meta = WorkspaceMeta {
+            name: "my-project".to_string(),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let deserialized: WorkspaceMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "my-project");
+    }
+
+    #[test]
+    fn read_meta_returns_some_for_valid_workspace() {
+        let dir = TempDir::new().unwrap();
+        let meta = WorkspaceMeta {
+            name: "test-workspace".to_string(),
+        };
+        let json = serde_json::to_string_pretty(&meta).unwrap();
+        fs::write(dir.path().join(WORKSPACE_FILE), json).unwrap();
+
+        let result = read_meta(dir.path());
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().name, "test-workspace");
+    }
+
+    #[test]
+    fn read_meta_returns_none_for_missing_file() {
+        let dir = TempDir::new().unwrap();
+        let result = read_meta(dir.path());
+        assert!(result.is_none());
+    }
 }

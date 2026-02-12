@@ -1,4 +1,5 @@
 mod config;
+mod styles;
 mod workspace;
 
 use clap::{Parser, Subcommand};
@@ -12,22 +13,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Example subcommand
-    Hello {
-        /// Name to greet
-        #[arg(short, long, default_value = "world")]
-        name: String,
-    },
-
     /// View or set up the global configuration
+    #[command(arg_required_else_help = true)]
     Config {
-        /// Print config as JSON
-        #[arg(long)]
-        json: bool,
-
-        /// Launch interactive setup wizard
-        #[arg(long)]
-        setup: bool,
+        #[command(subcommand)]
+        command: ConfigCommands,
     },
 
     /// Manage workspaces
@@ -36,6 +26,19 @@ enum Commands {
         #[command(subcommand)]
         command: WorkspaceCommands,
     },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Display the current configuration
+    Show {
+        /// Print config as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Launch interactive setup wizard
+    Setup,
 }
 
 #[derive(Subcommand)]
@@ -64,35 +67,35 @@ enum WorkspaceCommands {
     },
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Hello { name } => {
-            println!("Hello, {name}!");
-        }
-        Commands::Config { json, setup } => {
-            if setup {
-                config::run_setup();
-            } else {
-                let cfg = config::load_config();
+        Commands::Config { command } => match command {
+            ConfigCommands::Show { json } => {
+                let cfg = config::load_config()?;
                 if json {
-                    config::print_json(&cfg);
+                    config::print_json(&cfg)?;
                 } else {
-                    config::print_pretty(&cfg);
+                    config::print_pretty(&cfg)?;
                 }
             }
-        }
+            ConfigCommands::Setup => {
+                config::run_setup()?;
+            }
+        },
         Commands::Workspace { command } => match command {
             WorkspaceCommands::List => {
-                workspace::list();
+                workspace::list()?;
             }
             WorkspaceCommands::Create { path, name } => {
-                workspace::create(&path, name.as_deref());
+                workspace::create(&path, name.as_deref())?;
             }
             WorkspaceCommands::Remove { workspace, force } => {
-                workspace::remove(&workspace, force);
+                workspace::remove(&workspace, force)?;
             }
         },
     }
+
+    Ok(())
 }
