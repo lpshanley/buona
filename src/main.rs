@@ -1,3 +1,5 @@
+mod config;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -15,6 +17,17 @@ enum Commands {
         #[arg(short, long, default_value = "world")]
         name: String,
     },
+
+    /// View or set up the global configuration
+    Config {
+        /// Print config as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Launch interactive setup wizard
+        #[arg(long)]
+        setup: bool,
+    },
 }
 
 fn main() {
@@ -23,6 +36,18 @@ fn main() {
     match cli.command {
         Commands::Hello { name } => {
             println!("Hello, {name}!");
+        }
+        Commands::Config { json, setup } => {
+            if setup {
+                config::run_setup();
+            } else {
+                let cfg = config::load_config();
+                if json {
+                    config::print_json(&cfg);
+                } else {
+                    config::print_pretty(&cfg);
+                }
+            }
         }
     }
 }
