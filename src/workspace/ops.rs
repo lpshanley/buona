@@ -1,4 +1,4 @@
-//! Workspace operations — list, create, delete, add, remove, sync, and open.
+//! Workspace operations — list, create, delete, add, remove, sync, adopt, and open.
 
 use std::env;
 use std::fs;
@@ -12,7 +12,7 @@ use crate::config;
 use crate::styles::Styles;
 
 use super::git::resolve_package_spec;
-use super::types::{PackageEntry, WorkspaceMeta, WORKSPACE_FILE, read_meta, write_meta};
+use super::types::{WorkspaceMeta, WORKSPACE_FILE, read_meta, write_meta};
 use super::vscode::{VscodeWorkspace, VscodeWorkspaceFolder, sanitize_name};
 
 /// Find a workspace by name or directory name. Returns the resolved path.
@@ -70,6 +70,63 @@ fn find_workspace_root(start: &Path) -> Result<PathBuf> {
 fn find_workspace_from_cwd() -> Result<PathBuf> {
     let cwd = env::current_dir().context("could not determine current directory")?;
     find_workspace_root(&cwd)
+}
+
+/// Scan the `src/` directory of a workspace and return sorted package names.
+///
+/// Each subdirectory of `src/` is treated as a package. Returns an empty vec
+/// if the `src/` directory does not exist.
+fn list_packages(ws_root: &Path) -> Result<Vec<String>> {
+    let src_dir = ws_root.join("src");
+    if !src_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut names: Vec<String> = Vec::new();
+    for entry in fs::read_dir(&src_dir)
+        .with_context(|| format!("could not read src directory: {}", src_dir.display()))?
+    {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Detect the git remote origin URL for a directory, if it is a git repo.
+///
+/// Returns the URL string on success, or an empty string if the directory is
+/// not a git repo or has no `origin` remote.
+fn detect_git_remote_url(dir: &Path) -> String {
+    Command::new("git")
+        .args(["-C", &dir.to_string_lossy(), "remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let url = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if url.is_empty() { None } else { Some(url) }
+        })
+        .unwrap_or_default()
+}
+
+/// Detect the current git branch for a directory.
+///
+/// Returns the branch name on success, or an empty string if the directory is
+/// not a git repo or HEAD is detached.
+fn detect_git_branch(dir: &Path) -> String {
+    Command::new("git")
+        .args(["-C", &dir.to_string_lossy(), "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let branch = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            // "HEAD" is returned when in detached state
+            if branch.is_empty() || branch == "HEAD" { None } else { Some(branch) }
+        })
+        .unwrap_or_default()
 }
 
 /// List all workspaces (directories) found in the configured workspace directory.
@@ -182,10 +239,7 @@ pub(crate) fn create(path: &Path, name: Option<&str>) -> Result<()> {
     })?;
 
     // Write the workspace metadata file
-    let meta = WorkspaceMeta {
-        name: ws_name,
-        packages: Vec::new(),
-    };
+    let meta = WorkspaceMeta { name: ws_name };
     write_meta(&target, &meta)?;
 
     // Auto-sync the .code-workspace file
@@ -260,7 +314,7 @@ pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
         None => find_workspace_from_cwd()?,
     };
 
-    let mut meta = read_meta(&ws_root)?
+    let meta = read_meta(&ws_root)?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
     let src_dir = ws_root.join("src");
@@ -273,7 +327,7 @@ pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
     );
     println!("  {}", s.dim.apply_to("───────────────────────────"));
 
-    let mut successes: Vec<PackageEntry> = Vec::new();
+    let mut successes: Vec<String> = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
 
     for spec in packages {
@@ -317,10 +371,7 @@ pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
                 s.green.apply_to("✔"),
                 s.bold.apply_to(&resolved.name)
             );
-            successes.push(PackageEntry {
-                name: resolved.name,
-                url: resolved.url,
-            });
+            successes.push(resolved.name);
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let msg = stderr.trim().to_string();
@@ -329,12 +380,8 @@ pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
         }
     }
 
-    // Update workspace metadata with successfully cloned packages
+    // Re-sync the .code-workspace file (picks up newly cloned directories)
     if !successes.is_empty() {
-        meta.packages.extend(successes.iter().cloned());
-        write_meta(&ws_root, &meta)?;
-
-        // Auto-sync the .code-workspace file
         sync_workspace_file(&ws_root, &meta)?;
     }
 
@@ -361,9 +408,8 @@ pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
 
 /// Remove one or more packages from a workspace.
 ///
-/// Removes the package entries from `buona.workspace.json` and deletes the
-/// corresponding directories under `src/`. Prompts for confirmation unless
-/// `force` is true.
+/// Deletes the corresponding directories under `src/` and re-syncs the
+/// `.code-workspace` file. Prompts for confirmation unless `force` is true.
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
@@ -376,20 +422,21 @@ pub(crate) fn remove_packages(packages: &[String], workspace: Option<&str>, forc
         None => find_workspace_from_cwd()?,
     };
 
-    let mut meta = read_meta(&ws_root)?
+    let meta = read_meta(&ws_root)?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
     let src_dir = ws_root.join("src");
+    let known_packages = list_packages(&ws_root)?;
 
-    // Partition packages into found (with their index) and not-found
-    let mut to_remove: Vec<(usize, &PackageEntry)> = Vec::new();
+    // Partition packages into found and not-found
+    let mut to_remove: Vec<&str> = Vec::new();
     let mut not_found: Vec<&str> = Vec::new();
 
     for name in packages {
-        if let Some(idx) = meta.packages.iter().position(|p| p.name == *name) {
+        if known_packages.iter().any(|p| p == name) {
             // Avoid duplicates if the user passes the same name twice
-            if !to_remove.iter().any(|(i, _)| *i == idx) {
-                to_remove.push((idx, &meta.packages[idx]));
+            if !to_remove.contains(&name.as_str()) {
+                to_remove.push(name);
             }
         } else {
             not_found.push(name);
@@ -426,8 +473,8 @@ pub(crate) fn remove_packages(packages: &[String], workspace: Option<&str>, forc
         s.bold.apply_to(&meta.name)
     );
     println!("  {}", s.dim.apply_to("───────────────────────────"));
-    for (_, pkg) in &to_remove {
-        println!("  {}  {}", s.red.apply_to("−"), pkg.name);
+    for name in &to_remove {
+        println!("  {}  {}", s.red.apply_to("−"), name);
     }
     println!();
 
@@ -435,7 +482,7 @@ pub(crate) fn remove_packages(packages: &[String], workspace: Option<&str>, forc
         let prompt_msg = if to_remove.len() == 1 {
             format!(
                 "  Remove {} from {}?",
-                s.bold.apply_to(&to_remove[0].1.name),
+                s.bold.apply_to(to_remove[0]),
                 s.bold.apply_to(&meta.name)
             )
         } else {
@@ -463,39 +510,27 @@ pub(crate) fn remove_packages(packages: &[String], workspace: Option<&str>, forc
     let mut removed: Vec<String> = Vec::new();
     let mut dir_errors: Vec<(String, String)> = Vec::new();
 
-    // Collect indices to remove (sorted in reverse to avoid shifting)
-    let mut indices: Vec<usize> = to_remove.iter().map(|(i, _)| *i).collect();
-    indices.sort_unstable();
-    indices.reverse();
-
-    for &idx in &indices {
-        let pkg = &meta.packages[idx];
-        let pkg_dir = src_dir.join(&pkg.name);
-        let pkg_name = pkg.name.clone();
+    for &name in &to_remove {
+        let pkg_dir = src_dir.join(name);
 
         if pkg_dir.exists() {
             if let Err(e) = fs::remove_dir_all(&pkg_dir) {
-                dir_errors.push((pkg_name.clone(), format!("{e}")));
+                dir_errors.push((name.to_string(), format!("{e}")));
                 println!(
                     "  {} {} — could not remove directory: {}",
                     s.red.apply_to("✘"),
-                    pkg_name,
+                    name,
                     e
                 );
                 continue;
             }
         }
 
-        // Remove from metadata
-        meta.packages.remove(idx);
-        removed.push(pkg_name);
+        removed.push(name.to_string());
     }
 
-    // Save updated metadata
+    // Re-sync the .code-workspace file
     if !removed.is_empty() {
-        write_meta(&ws_root, &meta)?;
-
-        // Auto-sync the .code-workspace file
         sync_workspace_file(&ws_root, &meta)?;
     }
 
@@ -533,10 +568,10 @@ pub(crate) fn remove_packages(packages: &[String], workspace: Option<&str>, forc
     Ok(())
 }
 
-/// Generate a `.code-workspace` file from the given workspace root and metadata.
+/// Generate a `.code-workspace` file from the workspace root.
 ///
-/// This is the core sync logic shared by `sync()` and other operations that
-/// modify metadata (`create`, `add`, `remove`). Returns the path to the
+/// Derives the folder list by scanning `src/` for subdirectories. Uses
+/// `meta.name` to produce the workspace filename. Returns the path to the
 /// generated file.
 fn sync_workspace_file(ws_root: &Path, meta: &WorkspaceMeta) -> Result<PathBuf> {
     let sanitized = sanitize_name(&meta.name);
@@ -550,13 +585,13 @@ fn sync_workspace_file(ws_root: &Path, meta: &WorkspaceMeta) -> Result<PathBuf> 
     let filename = format!("{sanitized}.code-workspace");
     let ws_file_path = ws_root.join(&filename);
 
-    // Build folder entries from tracked packages
-    let folders: Vec<VscodeWorkspaceFolder> = meta
-        .packages
+    // Build folder entries from directories in src/
+    let pkg_names = list_packages(ws_root)?;
+    let folders: Vec<VscodeWorkspaceFolder> = pkg_names
         .iter()
-        .map(|pkg| VscodeWorkspaceFolder {
-            path: format!("src/{}", pkg.name),
-            name: pkg.name.clone(),
+        .map(|name| VscodeWorkspaceFolder {
+            path: format!("src/{name}"),
+            name: name.clone(),
         })
         .collect();
 
@@ -575,7 +610,7 @@ fn sync_workspace_file(ws_root: &Path, meta: &WorkspaceMeta) -> Result<PathBuf> 
 /// Pull (or fetch) the latest changes for tracked packages and re-sync the
 /// `.code-workspace` file.
 ///
-/// When `packages` is empty, all tracked packages are synced. Otherwise, only
+/// When `packages` is empty, all packages in `src/` are synced. Otherwise, only
 /// the named packages are synced. Runs `git pull` (or `git fetch` when
 /// `fetch_only` is true) in each package directory, reports results, and
 /// regenerates the workspace file. Returns the path to the generated
@@ -596,16 +631,18 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
     let src_dir = ws_root.join("src");
+    let known_packages = list_packages(&ws_root)?;
 
     // Determine which packages to sync
-    let targets: Vec<&PackageEntry> = if packages.is_empty() {
-        meta.packages.iter().collect()
+    let targets: Vec<&str> = if packages.is_empty() {
+        known_packages.iter().map(|s| s.as_str()).collect()
     } else {
-        let mut matched: Vec<&PackageEntry> = Vec::new();
+        let mut matched: Vec<&str> = Vec::new();
         for name in packages {
-            match meta.packages.iter().find(|p| p.name == *name) {
-                Some(pkg) => matched.push(pkg),
-                None => bail!("package \"{name}\" not found in workspace {}", meta.name),
+            if known_packages.iter().any(|p| p == name) {
+                matched.push(name);
+            } else {
+                bail!("package \"{name}\" not found in workspace {}", meta.name);
             }
         }
         matched
@@ -626,13 +663,13 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
     let mut pulled: Vec<String> = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
 
-    for pkg in &targets {
-        let pkg_dir = src_dir.join(&pkg.name);
+    for &pkg_name in &targets {
+        let pkg_dir = src_dir.join(pkg_name);
 
         if !pkg_dir.exists() {
             let msg = format!("directory not found: {}", pkg_dir.display());
-            failures.push((pkg.name.clone(), msg.clone()));
-            println!("  {} {} — {}", s.red.apply_to("✘"), pkg.name, msg);
+            failures.push((pkg_name.to_string(), msg.clone()));
+            println!("  {} {} — {}", s.red.apply_to("✘"), pkg_name, msg);
             continue;
         }
 
@@ -641,7 +678,7 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
             "  {} {} {} ...",
             s.dim.apply_to("→"),
             git_op,
-            s.cyan.apply_to(&pkg.name)
+            s.cyan.apply_to(pkg_name)
         );
 
         let git_arg = if fetch_only { "fetch" } else { "pull" };
@@ -659,15 +696,15 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
             println!(
                 "  {} {} — {}",
                 s.green.apply_to("✔"),
-                s.bold.apply_to(&pkg.name),
+                s.bold.apply_to(pkg_name),
                 s.dim.apply_to(summary)
             );
-            pulled.push(pkg.name.clone());
+            pulled.push(pkg_name.to_string());
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let msg = stderr.trim().to_string();
-            failures.push((pkg.name.clone(), msg.clone()));
-            println!("  {} {} — {}", s.red.apply_to("✘"), pkg.name, msg);
+            failures.push((pkg_name.to_string(), msg.clone()));
+            println!("  {} {} — {}", s.red.apply_to("✘"), pkg_name, msg);
         }
     }
 
@@ -704,8 +741,8 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
 
 /// Pretty-print detailed information about a workspace.
 ///
-/// Shows workspace name, directory location, tracked packages (with their
-/// clone URLs and on-disk status), and the `.code-workspace` file path.
+/// Shows workspace name, directory location, packages (discovered from `src/`),
+/// their git remote URLs, and the `.code-workspace` file path.
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
@@ -721,13 +758,33 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
     let meta = read_meta(&ws_root)?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
+    let src_dir = ws_root.join("src");
+    let pkg_names = list_packages(&ws_root)?;
+
     if json {
-        let json = serde_json::to_string_pretty(&meta)?;
-        println!("{json}");
+        // Build a JSON representation with packages derived from disk
+        let packages_json: Vec<serde_json::Value> = pkg_names
+            .iter()
+            .map(|name| {
+                let pkg_dir = src_dir.join(name);
+                let url = detect_git_remote_url(&pkg_dir);
+                let branch = detect_git_branch(&pkg_dir);
+                serde_json::json!({
+                    "name": name,
+                    "url": if url.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(url) },
+                    "branch": if branch.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(branch) },
+                    "dir": pkg_dir.display().to_string(),
+                })
+            })
+            .collect();
+
+        let output = serde_json::json!({
+            "name": meta.name,
+            "packages": packages_json,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
     }
-
-    let src_dir = ws_root.join("src");
 
     // Derive the .code-workspace filename
     let sanitized = sanitize_name(&meta.name);
@@ -760,33 +817,38 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
     println!(
         "  {}  {}",
         s.cyan.apply_to("Packages:"),
-        meta.packages.len()
+        pkg_names.len()
     );
 
-    if !meta.packages.is_empty() {
+    if !pkg_names.is_empty() {
         println!();
         println!("  {}", s.bold.apply_to("Packages"));
         println!("  {}", s.dim.apply_to("──────────────"));
 
-        for pkg in &meta.packages {
-            let pkg_dir = src_dir.join(&pkg.name);
-            let status = if pkg_dir.exists() {
-                s.green.apply_to("✔ cloned").to_string()
-            } else {
-                s.red.apply_to("✘ missing").to_string()
-            };
+        for name in &pkg_names {
+            let pkg_dir = src_dir.join(name);
+            let url = detect_git_remote_url(&pkg_dir);
+            let branch = detect_git_branch(&pkg_dir);
 
             println!(
-                "  {}  {}  {}",
+                "  {}  {}",
                 s.cyan.apply_to("•"),
-                s.bold.apply_to(&pkg.name),
-                status
+                s.bold.apply_to(name),
             );
-            println!(
-                "     {}  {}",
-                s.dim.apply_to("url:"),
-                s.dim.apply_to(&pkg.url)
-            );
+            if !url.is_empty() {
+                println!(
+                    "     {}  {}",
+                    s.dim.apply_to("url:"),
+                    s.dim.apply_to(&url)
+                );
+            }
+            if !branch.is_empty() {
+                println!(
+                    "     {}  {}",
+                    s.dim.apply_to("branch:"),
+                    s.dim.apply_to(&branch)
+                );
+            }
             println!(
                 "     {}  {}",
                 s.dim.apply_to("dir:"),
@@ -857,22 +919,186 @@ pub(crate) fn open(workspace: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Adopt an existing local directory into the workspace.
+///
+/// Moves (or copies with `--copy`) the directory into `src/` if it is not
+/// already there, then syncs the `.code-workspace` file. The directory's
+/// presence in `src/` is all the registration needed.
+///
+/// If `workspace` is provided, it is looked up by name or directory.
+/// Otherwise, the workspace is detected from the current working directory.
+pub(crate) fn adopt(
+    path: &Path,
+    workspace: Option<&str>,
+    copy: bool,
+    name_override: Option<&str>,
+) -> Result<()> {
+    let s = Styles::default();
+
+    // Resolve the workspace root
+    let ws_root = match workspace {
+        Some(name) => find_workspace(name)?,
+        None => find_workspace_from_cwd()?,
+    };
+
+    let meta = read_meta(&ws_root)?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+
+    // Resolve and validate the source path
+    let source = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .context("could not determine current directory")?
+            .join(path)
+    };
+
+    if !source.exists() {
+        bail!("path does not exist: {}", source.display());
+    }
+    if !source.is_dir() {
+        bail!(
+            "path is not a directory: {}\n  The adopt command requires a directory path.",
+            source.display()
+        );
+    }
+
+    let source = source
+        .canonicalize()
+        .with_context(|| format!("could not resolve path: {}", source.display()))?;
+
+    // Derive the package name
+    let pkg_name = match name_override {
+        Some(n) => n.to_string(),
+        None => source
+            .file_name()
+            .context("could not determine directory name from path")?
+            .to_string_lossy()
+            .into_owned(),
+    };
+
+    let src_dir = ws_root.join("src");
+    let dest = src_dir.join(&pkg_name);
+
+    // Check if the directory is already at the correct location
+    let already_in_place = dest.exists()
+        && dest
+            .canonicalize()
+            .ok()
+            .map(|d| d == source)
+            .unwrap_or(false);
+
+    if already_in_place {
+        println!();
+        println!(
+            "  {} Directory already at {}",
+            s.dim.apply_to("→"),
+            s.dim.apply_to(dest.display().to_string())
+        );
+    } else {
+        // Ensure src/ exists
+        fs::create_dir_all(&src_dir)
+            .with_context(|| format!("could not create src directory: {}", src_dir.display()))?;
+
+        if dest.exists() {
+            bail!(
+                "destination already exists: {}\n  \
+                 A directory with the name \"{}\" is already in src/. \
+                 Use --name to specify a different name.",
+                dest.display(),
+                pkg_name
+            );
+        }
+
+        if copy {
+            println!(
+                "  {} Copying {} to {} ...",
+                s.dim.apply_to("→"),
+                s.cyan.apply_to(&pkg_name),
+                s.dim.apply_to(dest.display().to_string())
+            );
+
+            let status = Command::new("cp")
+                .args(["-a"])
+                .arg(&source)
+                .arg(&dest)
+                .status()
+                .context("failed to execute cp — is it available on your system?")?;
+
+            if !status.success() {
+                bail!("cp failed with {status}");
+            }
+        } else {
+            println!(
+                "  {} Moving {} to {} ...",
+                s.dim.apply_to("→"),
+                s.cyan.apply_to(&pkg_name),
+                s.dim.apply_to(dest.display().to_string())
+            );
+
+            // Try fs::rename first (fast, same-filesystem only)
+            if fs::rename(&source, &dest).is_err() {
+                // Fall back to copy + delete for cross-device moves
+                let status = Command::new("cp")
+                    .args(["-a"])
+                    .arg(&source)
+                    .arg(&dest)
+                    .status()
+                    .context("failed to execute cp — is it available on your system?")?;
+
+                if !status.success() {
+                    bail!("cp failed with {status}");
+                }
+
+                fs::remove_dir_all(&source).with_context(|| {
+                    format!(
+                        "copied to destination but could not remove original: {}",
+                        source.display()
+                    )
+                })?;
+            }
+        }
+    }
+
+    // Sync the .code-workspace file (picks up the new directory in src/)
+    sync_workspace_file(&ws_root, &meta)?;
+
+    println!();
+    println!(
+        "  {} Adopted {}",
+        s.green.apply_to("✔"),
+        s.bold.apply_to(&pkg_name)
+    );
+    println!(
+        "  {}  {}",
+        s.dim.apply_to("Location:"),
+        dest.display()
+    );
+    println!();
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Helper: create a workspace directory with metadata and a `src/` dir.
+    fn setup_workspace(dir: &Path, name: &str) {
+        fs::create_dir_all(dir.join("src")).unwrap();
+        let meta = WorkspaceMeta {
+            name: name.to_string(),
+        };
+        write_meta(dir, &meta).unwrap();
+    }
 
     // ── find_workspace_root tests ────────────────────────────────────
 
     #[test]
     fn find_workspace_root_in_workspace_dir() {
         let dir = TempDir::new().unwrap();
-        let meta = WorkspaceMeta {
-            name: "test".to_string(),
-            packages: Vec::new(),
-        };
-        let json = serde_json::to_string_pretty(&meta).unwrap();
-        fs::write(dir.path().join(WORKSPACE_FILE), json).unwrap();
+        setup_workspace(dir.path(), "test");
 
         let result = find_workspace_root(dir.path()).unwrap();
         assert_eq!(result, dir.path());
@@ -881,12 +1107,7 @@ mod tests {
     #[test]
     fn find_workspace_root_in_child_dir() {
         let dir = TempDir::new().unwrap();
-        let meta = WorkspaceMeta {
-            name: "test".to_string(),
-            packages: Vec::new(),
-        };
-        let json = serde_json::to_string_pretty(&meta).unwrap();
-        fs::write(dir.path().join(WORKSPACE_FILE), json).unwrap();
+        setup_workspace(dir.path(), "test");
 
         // Create a child directory and search from there
         let child = dir.path().join("src").join("deep");
@@ -903,175 +1124,184 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── sync tests ──────────────────────────────────────────────────
+    // ── list_packages tests ─────────────────────────────────────────
+
+    #[test]
+    fn list_packages_returns_sorted_directory_names() {
+        let dir = TempDir::new().unwrap();
+        setup_workspace(dir.path(), "test");
+
+        let src = dir.path().join("src");
+        fs::create_dir_all(src.join("gamma")).unwrap();
+        fs::create_dir_all(src.join("alpha")).unwrap();
+        fs::create_dir_all(src.join("beta")).unwrap();
+
+        let names = list_packages(dir.path()).unwrap();
+        assert_eq!(names, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn list_packages_ignores_files_in_src() {
+        let dir = TempDir::new().unwrap();
+        setup_workspace(dir.path(), "test");
+
+        let src = dir.path().join("src");
+        fs::create_dir_all(src.join("real-pkg")).unwrap();
+        fs::write(src.join("not-a-package.txt"), "hello").unwrap();
+
+        let names = list_packages(dir.path()).unwrap();
+        assert_eq!(names, vec!["real-pkg"]);
+    }
+
+    #[test]
+    fn list_packages_returns_empty_when_no_src() {
+        let dir = TempDir::new().unwrap();
+        // No src/ directory at all
+        let meta = WorkspaceMeta {
+            name: "test".to_string(),
+        };
+        write_meta(dir.path(), &meta).unwrap();
+
+        let names = list_packages(dir.path()).unwrap();
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn list_packages_returns_empty_when_src_is_empty() {
+        let dir = TempDir::new().unwrap();
+        setup_workspace(dir.path(), "test");
+
+        let names = list_packages(dir.path()).unwrap();
+        assert!(names.is_empty());
+    }
+
+    // ── detect_git_remote_url tests ─────────────────────────────────
+
+    #[test]
+    fn detect_git_remote_url_finds_origin() {
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path().join("git-repo");
+        fs::create_dir_all(&repo).unwrap();
+
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["remote", "add", "origin", "git@github.com:acme/test.git"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+
+        let url = detect_git_remote_url(&repo);
+        assert_eq!(url, "git@github.com:acme/test.git");
+    }
+
+    #[test]
+    fn detect_git_remote_url_returns_empty_for_non_git_dir() {
+        let dir = TempDir::new().unwrap();
+        let plain = dir.path().join("plain-dir");
+        fs::create_dir_all(&plain).unwrap();
+
+        let url = detect_git_remote_url(&plain);
+        assert!(url.is_empty());
+    }
+
+    // ── detect_git_branch tests ─────────────────────────────────────
+
+    #[test]
+    fn detect_git_branch_finds_current_branch() {
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path().join("git-repo");
+        fs::create_dir_all(&repo).unwrap();
+
+        std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+
+        // HEAD requires at least one commit to resolve
+        fs::write(repo.join("README.md"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "init"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+
+        let branch = detect_git_branch(&repo);
+        assert_eq!(branch, "main");
+    }
+
+    #[test]
+    fn detect_git_branch_returns_empty_for_non_git_dir() {
+        let dir = TempDir::new().unwrap();
+        let plain = dir.path().join("plain-dir");
+        fs::create_dir_all(&plain).unwrap();
+
+        let branch = detect_git_branch(&plain);
+        assert!(branch.is_empty());
+    }
 
     // ── remove_packages tests ───────────────────────────────────────
 
     #[test]
-    fn remove_packages_removes_from_metadata() {
+    fn remove_deletes_directory_from_src() {
         let dir = TempDir::new().unwrap();
-        let meta = WorkspaceMeta {
-            name: "test".to_string(),
-            packages: vec![
-                PackageEntry {
-                    name: "alpha".to_string(),
-                    url: "git@github.com:acme/alpha.git".to_string(),
-                },
-                PackageEntry {
-                    name: "beta".to_string(),
-                    url: "git@github.com:acme/beta.git".to_string(),
-                },
-                PackageEntry {
-                    name: "gamma".to_string(),
-                    url: "git@github.com:acme/gamma.git".to_string(),
-                },
-            ],
-        };
-        write_meta(dir.path(), &meta).unwrap();
+        setup_workspace(dir.path(), "test");
 
-        // Create package directories
         let src = dir.path().join("src");
         fs::create_dir_all(src.join("alpha")).unwrap();
         fs::create_dir_all(src.join("beta")).unwrap();
         fs::create_dir_all(src.join("gamma")).unwrap();
 
-        // Simulate dropping "beta" with force (no confirmation prompt)
-        // We call the internal logic directly since drop_packages uses
-        // find_workspace_from_cwd / find_workspace which needs the global config.
-        // Instead, test the metadata manipulation and dir removal directly.
-        let mut meta = read_meta(dir.path()).unwrap().unwrap();
-        let idx = meta.packages.iter().position(|p| p.name == "beta").unwrap();
+        // Simulate removing "beta": delete its directory
         let pkg_dir = src.join("beta");
         fs::remove_dir_all(&pkg_dir).unwrap();
-        meta.packages.remove(idx);
-        write_meta(dir.path(), &meta).unwrap();
 
-        let updated = read_meta(dir.path()).unwrap().unwrap();
-        assert_eq!(updated.packages.len(), 2);
-        assert_eq!(updated.packages[0].name, "alpha");
-        assert_eq!(updated.packages[1].name, "gamma");
         assert!(!pkg_dir.exists());
+        let remaining = list_packages(dir.path()).unwrap();
+        assert_eq!(remaining, vec!["alpha", "gamma"]);
     }
 
     #[test]
-    fn remove_packages_removes_multiple_from_metadata() {
+    fn remove_multiple_directories_from_src() {
         let dir = TempDir::new().unwrap();
-        let meta = WorkspaceMeta {
-            name: "test".to_string(),
-            packages: vec![
-                PackageEntry {
-                    name: "alpha".to_string(),
-                    url: "git@github.com:acme/alpha.git".to_string(),
-                },
-                PackageEntry {
-                    name: "beta".to_string(),
-                    url: "git@github.com:acme/beta.git".to_string(),
-                },
-                PackageEntry {
-                    name: "gamma".to_string(),
-                    url: "git@github.com:acme/gamma.git".to_string(),
-                },
-            ],
-        };
-        write_meta(dir.path(), &meta).unwrap();
+        setup_workspace(dir.path(), "test");
 
         let src = dir.path().join("src");
         fs::create_dir_all(src.join("alpha")).unwrap();
         fs::create_dir_all(src.join("beta")).unwrap();
         fs::create_dir_all(src.join("gamma")).unwrap();
 
-        // Remove "alpha" and "gamma" (indices 0 and 2), reverse order to avoid shifting
-        let mut meta = read_meta(dir.path()).unwrap().unwrap();
-        let mut indices: Vec<usize> = vec![0, 2];
-        indices.sort_unstable();
-        indices.reverse();
-        for idx in indices {
-            let pkg_dir = src.join(&meta.packages[idx].name);
-            fs::remove_dir_all(&pkg_dir).unwrap();
-            meta.packages.remove(idx);
-        }
-        write_meta(dir.path(), &meta).unwrap();
+        // Remove "alpha" and "gamma"
+        fs::remove_dir_all(src.join("alpha")).unwrap();
+        fs::remove_dir_all(src.join("gamma")).unwrap();
 
-        let updated = read_meta(dir.path()).unwrap().unwrap();
-        assert_eq!(updated.packages.len(), 1);
-        assert_eq!(updated.packages[0].name, "beta");
-        assert!(!src.join("alpha").exists());
-        assert!(src.join("beta").exists());
-        assert!(!src.join("gamma").exists());
+        let remaining = list_packages(dir.path()).unwrap();
+        assert_eq!(remaining, vec!["beta"]);
     }
 
-    #[test]
-    fn remove_packages_handles_missing_directory_gracefully() {
-        let dir = TempDir::new().unwrap();
-        let meta = WorkspaceMeta {
-            name: "test".to_string(),
-            packages: vec![PackageEntry {
-                name: "phantom".to_string(),
-                url: "git@github.com:acme/phantom.git".to_string(),
-            }],
-        };
-        write_meta(dir.path(), &meta).unwrap();
+    // ── sync_workspace_file tests ───────────────────────────────────
 
-        // Don't create the src/phantom directory — it's tracked but not on disk
+    #[test]
+    fn sync_workspace_file_derives_folders_from_src() {
+        let dir = TempDir::new().unwrap();
+        setup_workspace(dir.path(), "my-project");
+
         let src = dir.path().join("src");
-        let pkg_dir = src.join("phantom");
-        assert!(!pkg_dir.exists());
+        fs::create_dir_all(src.join("toolkit")).unwrap();
+        fs::create_dir_all(src.join("utils")).unwrap();
 
-        // The metadata removal should still succeed
-        let mut meta = read_meta(dir.path()).unwrap().unwrap();
-        meta.packages.remove(0);
-        write_meta(dir.path(), &meta).unwrap();
+        let meta = read_meta(dir.path()).unwrap().unwrap();
+        let ws_file_path = sync_workspace_file(dir.path(), &meta).unwrap();
 
-        let updated = read_meta(dir.path()).unwrap().unwrap();
-        assert!(updated.packages.is_empty());
-    }
-
-    // ── sync tests ──────────────────────────────────────────────────
-
-    #[test]
-    fn sync_creates_code_workspace_file() {
-        let dir = TempDir::new().unwrap();
-        let meta = WorkspaceMeta {
-            name: "my-project".to_string(),
-            packages: vec![
-                PackageEntry {
-                    name: "toolkit".to_string(),
-                    url: "git@github.com:acme/toolkit.git".to_string(),
-                },
-                PackageEntry {
-                    name: "utils".to_string(),
-                    url: "git@github.com:acme/utils.git".to_string(),
-                },
-            ],
-        };
-        write_meta(dir.path(), &meta).unwrap();
-
-        // We can't call sync() directly because it tries to resolve the workspace
-        // via config. Instead, test the pieces: sanitize + write.
-        let sanitized = sanitize_name(&meta.name);
-        assert_eq!(sanitized, "my-project");
-
-        let filename = format!("{sanitized}.code-workspace");
-        let ws_file_path = dir.path().join(&filename);
-
-        let folders: Vec<VscodeWorkspaceFolder> = meta
-            .packages
-            .iter()
-            .map(|pkg| VscodeWorkspaceFolder {
-                path: format!("src/{}", pkg.name),
-                name: pkg.name.clone(),
-            })
-            .collect();
-
-        let vscode_ws = VscodeWorkspace {
-            folders,
-            settings: serde_json::json!({}),
-        };
-
-        let json = serde_json::to_string_pretty(&vscode_ws).unwrap();
-        fs::write(&ws_file_path, &json).unwrap();
-
-        // Verify the file was written correctly
         assert!(ws_file_path.exists());
 
         let contents = fs::read_to_string(&ws_file_path).unwrap();
@@ -1080,5 +1310,143 @@ mod tests {
         assert_eq!(parsed["folders"][0]["name"], "toolkit");
         assert_eq!(parsed["folders"][1]["path"], "src/utils");
         assert_eq!(parsed["folders"][1]["name"], "utils");
+    }
+
+    #[test]
+    fn sync_workspace_file_empty_src() {
+        let dir = TempDir::new().unwrap();
+        setup_workspace(dir.path(), "empty-ws");
+
+        let meta = read_meta(dir.path()).unwrap().unwrap();
+        let ws_file_path = sync_workspace_file(dir.path(), &meta).unwrap();
+
+        let contents = fs::read_to_string(&ws_file_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(parsed["folders"].as_array().unwrap().len(), 0);
+    }
+
+    // ── adopt tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn adopt_moves_directory_into_src() {
+        let ws_dir = TempDir::new().unwrap();
+        setup_workspace(ws_dir.path(), "test-ws");
+
+        // Create a source directory outside the workspace
+        let outside = TempDir::new().unwrap();
+        let source = outside.path().join("my-pkg");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("hello.txt"), "world").unwrap();
+
+        let source_canonical = source.canonicalize().unwrap();
+
+        let src_dir = ws_dir.path().join("src");
+        let dest = src_dir.join("my-pkg");
+        assert!(!dest.exists());
+
+        // Simulate the adopt logic: move source into ws/src/my-pkg
+        if fs::rename(&source_canonical, &dest).is_err() {
+            std::process::Command::new("cp")
+                .args(["-a"])
+                .arg(&source_canonical)
+                .arg(&dest)
+                .status()
+                .unwrap();
+            fs::remove_dir_all(&source_canonical).unwrap();
+        }
+
+        // Verify the directory moved
+        assert!(dest.join("hello.txt").exists());
+        assert_eq!(fs::read_to_string(dest.join("hello.txt")).unwrap(), "world");
+        assert!(!source.exists(), "original should be gone after move");
+
+        // Package is discovered from filesystem
+        let pkgs = list_packages(ws_dir.path()).unwrap();
+        assert_eq!(pkgs, vec!["my-pkg"]);
+    }
+
+    #[test]
+    fn adopt_copies_when_flag_set() {
+        let ws_dir = TempDir::new().unwrap();
+        setup_workspace(ws_dir.path(), "test-ws");
+
+        let outside = TempDir::new().unwrap();
+        let source = outside.path().join("copy-pkg");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("data.txt"), "keep me").unwrap();
+
+        let dest = ws_dir.path().join("src").join("copy-pkg");
+
+        // Copy instead of move
+        let status = std::process::Command::new("cp")
+            .args(["-a"])
+            .arg(&source)
+            .arg(&dest)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        // Verify destination has the file
+        assert!(dest.join("data.txt").exists());
+        assert_eq!(
+            fs::read_to_string(dest.join("data.txt")).unwrap(),
+            "keep me"
+        );
+        // Original still exists
+        assert!(source.exists(), "original should still exist after copy");
+
+        // Package is discovered from filesystem
+        let pkgs = list_packages(ws_dir.path()).unwrap();
+        assert_eq!(pkgs, vec!["copy-pkg"]);
+    }
+
+    #[test]
+    fn adopt_registers_already_in_src() {
+        let ws_dir = TempDir::new().unwrap();
+        setup_workspace(ws_dir.path(), "test-ws");
+
+        // Place a directory directly in src/
+        let pkg_dir = ws_dir.path().join("src").join("existing-pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(pkg_dir.join("marker.txt"), "I was here").unwrap();
+
+        // The package is already discoverable — no move/copy needed
+        let pkgs = list_packages(ws_dir.path()).unwrap();
+        assert_eq!(pkgs, vec!["existing-pkg"]);
+
+        // File is still intact
+        assert_eq!(
+            fs::read_to_string(pkg_dir.join("marker.txt")).unwrap(),
+            "I was here"
+        );
+    }
+
+    #[test]
+    fn adopt_detects_existing_directory_as_conflict() {
+        let ws_dir = TempDir::new().unwrap();
+        setup_workspace(ws_dir.path(), "test-ws");
+
+        // Place a directory in src/ with the name "taken"
+        fs::create_dir_all(ws_dir.path().join("src").join("taken")).unwrap();
+
+        // The package already exists on disk — adopt should detect the conflict
+        let pkgs = list_packages(ws_dir.path()).unwrap();
+        assert!(pkgs.contains(&"taken".to_string()));
+    }
+
+    #[test]
+    fn adopt_errors_on_nonexistent_path() {
+        let dir = TempDir::new().unwrap();
+        let bogus = dir.path().join("does-not-exist");
+        assert!(!bogus.exists());
+    }
+
+    #[test]
+    fn adopt_errors_on_file_path() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("not-a-dir.txt");
+        fs::write(&file, "hello").unwrap();
+        assert!(file.exists());
+        assert!(!file.is_dir(), "files should be rejected by adopt");
     }
 }

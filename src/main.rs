@@ -128,6 +128,24 @@ enum WorkspaceCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Adopt an existing local directory into the workspace
+    Adopt {
+        /// Path to the directory to adopt
+        path: String,
+
+        /// Workspace name or directory (defaults to detecting from the current directory)
+        #[arg(short, long)]
+        workspace: Option<String>,
+
+        /// Copy the directory instead of moving it
+        #[arg(long)]
+        copy: bool,
+
+        /// Override the package name (defaults to the directory name)
+        #[arg(short, long)]
+        name: Option<String>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -182,6 +200,14 @@ fn main() -> anyhow::Result<()> {
             }
             WorkspaceCommands::Info { workspace, json } => {
                 workspace::info(workspace.as_deref(), json)?;
+            }
+            WorkspaceCommands::Adopt {
+                path,
+                workspace,
+                copy,
+                name,
+            } => {
+                workspace::adopt(Path::new(&path), workspace.as_deref(), copy, name.as_deref())?;
             }
         },
     }
