@@ -1,21 +1,57 @@
+use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use dialoguer::Input;
+use dialoguer::{Input, Select};
 use serde::{Deserialize, Serialize};
 
 use crate::styles::Styles;
 
+/// Supported IDE options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Ide {
+    /// Visual Studio Code
+    Vscode,
+    /// Cursor
+    Cursor,
+}
+
+impl Ide {
+    /// All variants in display order.
+    pub const ALL: [Ide; 2] = [Ide::Vscode, Ide::Cursor];
+}
+
+impl Default for Ide {
+    fn default() -> Self {
+        Ide::Vscode
+    }
+}
+
+impl fmt::Display for Ide {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Ide::Vscode => write!(f, "VS Code"),
+            Ide::Cursor => write!(f, "Cursor"),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuonaConfig {
     pub workspace_dir: String,
+
+    /// The user's preferred IDE.
+    #[serde(default)]
+    pub ide: Ide,
 }
 
 impl Default for BuonaConfig {
     fn default() -> Self {
         Self {
             workspace_dir: "~/workspace".to_string(),
+            ide: Ide::default(),
         }
     }
 }
@@ -91,6 +127,11 @@ pub fn print_pretty(config: &BuonaConfig) -> Result<()> {
         s.cyan.apply_to("Workspace Directory:"),
         config.workspace_dir
     );
+    println!(
+        "  {}  {}",
+        s.cyan.apply_to("IDE:"),
+        config.ide
+    );
     println!();
 
     if !file_exists {
@@ -136,7 +177,25 @@ pub fn run_setup() -> Result<()> {
         .interact_text()
         .context("failed to read input")?;
 
-    let config = BuonaConfig { workspace_dir };
+    let ide_options: Vec<String> = Ide::ALL.iter().map(|ide| ide.to_string()).collect();
+    let ide_default = Ide::ALL
+        .iter()
+        .position(|&i| i == current.ide)
+        .unwrap_or(0);
+
+    let ide_index = Select::new()
+        .with_prompt(format!("  {}", s.bold.apply_to("Preferred IDE")))
+        .items(&ide_options)
+        .default(ide_default)
+        .interact()
+        .context("failed to read input")?;
+
+    let ide = Ide::ALL[ide_index];
+
+    let config = BuonaConfig {
+        workspace_dir,
+        ide,
+    };
 
     save_config(&config)?;
 
@@ -187,5 +246,54 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: BuonaConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.workspace_dir, config.workspace_dir);
+        assert_eq!(deserialized.ide, config.ide);
+    }
+
+    #[test]
+    fn default_ide_is_vscode() {
+        assert_eq!(Ide::default(), Ide::Vscode);
+    }
+
+    #[test]
+    fn ide_display_vscode() {
+        assert_eq!(Ide::Vscode.to_string(), "VS Code");
+    }
+
+    #[test]
+    fn ide_display_cursor() {
+        assert_eq!(Ide::Cursor.to_string(), "Cursor");
+    }
+
+    #[test]
+    fn ide_serializes_to_lowercase() {
+        assert_eq!(serde_json::to_string(&Ide::Vscode).unwrap(), "\"vscode\"");
+        assert_eq!(serde_json::to_string(&Ide::Cursor).unwrap(), "\"cursor\"");
+    }
+
+    #[test]
+    fn ide_deserializes_from_lowercase() {
+        let vscode: Ide = serde_json::from_str("\"vscode\"").unwrap();
+        assert_eq!(vscode, Ide::Vscode);
+
+        let cursor: Ide = serde_json::from_str("\"cursor\"").unwrap();
+        assert_eq!(cursor, Ide::Cursor);
+    }
+
+    #[test]
+    fn config_without_ide_field_defaults_to_vscode() {
+        let json = r#"{"workspace_dir": "~/workspace"}"#;
+        let config: BuonaConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.ide, Ide::Vscode);
+    }
+
+    #[test]
+    fn config_with_ide_cursor_round_trips() {
+        let config = BuonaConfig {
+            workspace_dir: "~/work".to_string(),
+            ide: Ide::Cursor,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: BuonaConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.ide, Ide::Cursor);
     }
 }
