@@ -13,6 +13,60 @@ use crate::styles::Styles;
 
 const WORKSPACE_FILE: &str = "buona.workspace.json";
 
+// ── VS Code workspace file types ────────────────────────────────────
+
+/// A single folder entry in a `.code-workspace` file.
+#[derive(Debug, Serialize)]
+struct VscodeWorkspaceFolder {
+    path: String,
+    name: String,
+}
+
+/// The top-level structure of a `.code-workspace` file.
+#[derive(Debug, Serialize)]
+struct VscodeWorkspace {
+    folders: Vec<VscodeWorkspaceFolder>,
+    settings: serde_json::Value,
+}
+
+// ── Name sanitization ───────────────────────────────────────────────
+
+/// Sanitize a workspace name into a filename-safe and shell-safe string.
+///
+/// Replaces any character that is not alphanumeric, hyphen, underscore, or
+/// period with a hyphen, collapses consecutive hyphens, and trims
+/// leading/trailing hyphens.
+fn sanitize_name(name: &str) -> String {
+    let replaced: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    // Collapse consecutive hyphens
+    let mut result = String::with_capacity(replaced.len());
+    let mut prev_hyphen = false;
+    for c in replaced.chars() {
+        if c == '-' {
+            if !prev_hyphen {
+                result.push(c);
+            }
+            prev_hyphen = true;
+        } else {
+            result.push(c);
+            prev_hyphen = false;
+        }
+    }
+
+    // Trim leading/trailing hyphens
+    result.trim_matches('-').to_string()
+}
+
 /// A tracked package that has been added to a workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageEntry {
@@ -442,6 +496,121 @@ pub fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Sync workspace metadata to a `.code-workspace` file.
+///
+/// Reads the `buona.workspace.json`, builds a VS Code multi-root workspace
+/// file with one folder entry per tracked package, and writes it next to the
+/// metadata file. Returns the path to the generated `.code-workspace` file.
+///
+/// If `workspace` is provided, it is looked up by name or directory.
+/// Otherwise, the workspace is detected from the current working directory.
+pub fn sync(workspace: Option<&str>) -> Result<PathBuf> {
+    let s = Styles::default();
+
+    // Resolve the workspace root
+    let ws_root = match workspace {
+        Some(name) => find_workspace(name)?,
+        None => find_workspace_from_cwd()?,
+    };
+
+    let meta = read_meta(&ws_root)
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+
+    let sanitized = sanitize_name(&meta.name);
+    if sanitized.is_empty() {
+        bail!(
+            "workspace name \"{}\" produces an empty filename after sanitization",
+            meta.name
+        );
+    }
+
+    let filename = format!("{sanitized}.code-workspace");
+    let ws_file_path = ws_root.join(&filename);
+
+    // Build folder entries from tracked packages
+    let folders: Vec<VscodeWorkspaceFolder> = meta
+        .packages
+        .iter()
+        .map(|pkg| VscodeWorkspaceFolder {
+            path: format!("src/{}", pkg.name),
+            name: pkg.name.clone(),
+        })
+        .collect();
+
+    let vscode_ws = VscodeWorkspace {
+        folders,
+        settings: serde_json::json!({}),
+    };
+
+    let json = serde_json::to_string_pretty(&vscode_ws)?;
+    fs::write(&ws_file_path, json + "\n")
+        .with_context(|| format!("could not write workspace file: {}", ws_file_path.display()))?;
+
+    println!();
+    println!(
+        "  {} Synced workspace file {}",
+        s.green.apply_to("✔"),
+        s.bold.apply_to(&filename)
+    );
+    println!(
+        "  {}  {}",
+        s.dim.apply_to("Location:"),
+        ws_file_path.display()
+    );
+    println!();
+
+    Ok(ws_file_path)
+}
+
+/// Open a workspace in the configured editor.
+///
+/// Syncs the `.code-workspace` file first, then launches the editor.
+///
+/// If `workspace` is provided, it is looked up by name or directory.
+/// Otherwise, the workspace is detected from the current working directory.
+pub fn open(workspace: Option<&str>) -> Result<()> {
+    let s = Styles::default();
+    let cfg = config::load_config()?;
+
+    let ws_file_path = sync(workspace)?;
+
+    let ide_cmd = cfg.ide.command();
+
+    println!(
+        "  {} Opening in {} ...",
+        s.dim.apply_to("→"),
+        s.bold.apply_to(cfg.ide.to_string())
+    );
+
+    let status = Command::new(ide_cmd)
+        .arg(&ws_file_path)
+        .status()
+        .with_context(|| {
+            format!(
+                "failed to launch {ide_cmd} — is {} installed and on your PATH?",
+                cfg.ide
+            )
+        })?;
+
+    if !status.success() {
+        bail!("{ide_cmd} exited with {status}");
+    }
+
+    println!(
+        "  {} Opened {}",
+        s.green.apply_to("✔"),
+        s.bold.apply_to(
+            ws_file_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        )
+    );
+    println!();
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,5 +880,155 @@ mod tests {
         assert_eq!(result.name, "test");
         assert_eq!(result.packages.len(), 1);
         assert_eq!(result.packages[0].name, "pkg");
+    }
+
+    // ── sanitize_name tests ─────────────────────────────────────────
+
+    #[test]
+    fn sanitize_name_plain_name_unchanged() {
+        assert_eq!(sanitize_name("my-project"), "my-project");
+    }
+
+    #[test]
+    fn sanitize_name_with_underscores_and_dots() {
+        assert_eq!(sanitize_name("my_project.v2"), "my_project.v2");
+    }
+
+    #[test]
+    fn sanitize_name_replaces_spaces() {
+        assert_eq!(sanitize_name("My Cool Project"), "My-Cool-Project");
+    }
+
+    #[test]
+    fn sanitize_name_replaces_special_characters() {
+        assert_eq!(sanitize_name("project@v1!#$%"), "project-v1");
+    }
+
+    #[test]
+    fn sanitize_name_collapses_consecutive_hyphens() {
+        assert_eq!(sanitize_name("a---b"), "a-b");
+    }
+
+    #[test]
+    fn sanitize_name_trims_leading_trailing_hyphens() {
+        assert_eq!(sanitize_name("--project--"), "project");
+    }
+
+    #[test]
+    fn sanitize_name_complex_input() {
+        assert_eq!(
+            sanitize_name("My Cool Project!"),
+            "My-Cool-Project"
+        );
+    }
+
+    // ── VscodeWorkspace serialization tests ──────────────────────────
+
+    #[test]
+    fn vscode_workspace_serializes_correctly() {
+        let ws = VscodeWorkspace {
+            folders: vec![
+                VscodeWorkspaceFolder {
+                    path: "src/toolkit".to_string(),
+                    name: "toolkit".to_string(),
+                },
+                VscodeWorkspaceFolder {
+                    path: "src/utils".to_string(),
+                    name: "utils".to_string(),
+                },
+            ],
+            settings: serde_json::json!({}),
+        };
+
+        let json: serde_json::Value = serde_json::from_str(
+            &serde_json::to_string_pretty(&ws).unwrap(),
+        )
+        .unwrap();
+
+        assert!(json["folders"].is_array());
+        assert_eq!(json["folders"].as_array().unwrap().len(), 2);
+        assert_eq!(json["folders"][0]["path"], "src/toolkit");
+        assert_eq!(json["folders"][0]["name"], "toolkit");
+        assert_eq!(json["folders"][1]["path"], "src/utils");
+        assert_eq!(json["folders"][1]["name"], "utils");
+        assert_eq!(json["settings"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn vscode_workspace_empty_folders() {
+        let ws = VscodeWorkspace {
+            folders: vec![],
+            settings: serde_json::json!({}),
+        };
+
+        let json: serde_json::Value = serde_json::from_str(
+            &serde_json::to_string_pretty(&ws).unwrap(),
+        )
+        .unwrap();
+
+        assert!(json["folders"].as_array().unwrap().is_empty());
+    }
+
+    // ── sync tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn sync_creates_code_workspace_file() {
+        let dir = TempDir::new().unwrap();
+        let meta = WorkspaceMeta {
+            name: "my-project".to_string(),
+            packages: vec![
+                PackageEntry {
+                    name: "toolkit".to_string(),
+                    url: "git@github.com:acme/toolkit.git".to_string(),
+                },
+                PackageEntry {
+                    name: "utils".to_string(),
+                    url: "git@github.com:acme/utils.git".to_string(),
+                },
+            ],
+        };
+        write_meta(dir.path(), &meta).unwrap();
+
+        // We can't call sync() directly because it tries to resolve the workspace
+        // via config. Instead, test the pieces: sanitize + write.
+        let sanitized = sanitize_name(&meta.name);
+        assert_eq!(sanitized, "my-project");
+
+        let filename = format!("{sanitized}.code-workspace");
+        let ws_file_path = dir.path().join(&filename);
+
+        let folders: Vec<VscodeWorkspaceFolder> = meta
+            .packages
+            .iter()
+            .map(|pkg| VscodeWorkspaceFolder {
+                path: format!("src/{}", pkg.name),
+                name: pkg.name.clone(),
+            })
+            .collect();
+
+        let vscode_ws = VscodeWorkspace {
+            folders,
+            settings: serde_json::json!({}),
+        };
+
+        let json = serde_json::to_string_pretty(&vscode_ws).unwrap();
+        fs::write(&ws_file_path, &json).unwrap();
+
+        // Verify the file was written correctly
+        assert!(ws_file_path.exists());
+
+        let contents = fs::read_to_string(&ws_file_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(parsed["folders"][0]["path"], "src/toolkit");
+        assert_eq!(parsed["folders"][0]["name"], "toolkit");
+        assert_eq!(parsed["folders"][1]["path"], "src/utils");
+        assert_eq!(parsed["folders"][1]["name"], "utils");
+    }
+
+    #[test]
+    fn sync_sanitizes_workspace_name_for_filename() {
+        let sanitized = sanitize_name("My Cool Project!");
+        let filename = format!("{sanitized}.code-workspace");
+        assert_eq!(filename, "My-Cool-Project.code-workspace");
     }
 }

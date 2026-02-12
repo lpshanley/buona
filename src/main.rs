@@ -76,6 +76,20 @@ enum WorkspaceCommands {
         #[arg(short, long)]
         workspace: Option<String>,
     },
+
+    /// Sync workspace metadata to a .code-workspace file
+    Sync {
+        /// Workspace name or directory (defaults to detecting from the current directory)
+        #[arg(short, long)]
+        workspace: Option<String>,
+    },
+
+    /// Open workspace in the configured editor
+    Open {
+        /// Workspace name or directory (defaults to detecting from the current directory)
+        #[arg(short, long)]
+        workspace: Option<String>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -110,6 +124,12 @@ fn main() -> anyhow::Result<()> {
                 workspace,
             } => {
                 workspace::add(&packages, workspace.as_deref())?;
+            }
+            WorkspaceCommands::Sync { workspace } => {
+                workspace::sync(workspace.as_deref())?;
+            }
+            WorkspaceCommands::Open { workspace } => {
+                workspace::open(workspace.as_deref())?;
             }
         },
     }

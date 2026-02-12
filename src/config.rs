@@ -21,6 +21,14 @@ pub enum Ide {
 impl Ide {
     /// All variants in display order.
     pub const ALL: [Ide; 2] = [Ide::Vscode, Ide::Cursor];
+
+    /// Returns the CLI command name used to launch this editor.
+    pub fn command(&self) -> &'static str {
+        match self {
+            Ide::Vscode => "code",
+            Ide::Cursor => "cursor",
+        }
+    }
 }
 
 impl Default for Ide {
@@ -501,6 +509,18 @@ mod tests {
         assert_eq!(config.git.host, "git.corp.com");
         assert_eq!(config.git.organization, "");
         assert_eq!(config.git.protocol, GitProtocol::Ssh);
+    }
+
+    // ── Ide::command tests ────────────────────────────────────────
+
+    #[test]
+    fn ide_command_vscode() {
+        assert_eq!(Ide::Vscode.command(), "code");
+    }
+
+    #[test]
+    fn ide_command_cursor() {
+        assert_eq!(Ide::Cursor.command(), "cursor");
     }
 
     #[test]
