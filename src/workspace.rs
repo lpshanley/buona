@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use dialoguer::Confirm;
 use serde::{Deserialize, Serialize};
 
@@ -56,13 +56,12 @@ fn find_workspace(query: &str) -> Result<PathBuf> {
     }
 
     // Otherwise, search by workspace name in metadata
-    let entries = fs::read_dir(&workspace_dir)
-        .with_context(|| {
-            format!(
-                "could not read workspace directory: {}",
-                workspace_dir.display()
-            )
-        })?;
+    let entries = fs::read_dir(&workspace_dir).with_context(|| {
+        format!(
+            "could not read workspace directory: {}",
+            workspace_dir.display()
+        )
+    })?;
 
     for entry in entries {
         let entry = entry?;
@@ -143,9 +142,7 @@ fn resolve_package_spec(spec: &str, git: &config::GitConfig) -> Result<ResolvedP
         spec.to_string()
     } else if spec.contains('/') {
         // Org/Package pattern
-        let (org, package) = spec
-            .split_once('/')
-            .expect("already checked contains '/'");
+        let (org, package) = spec.split_once('/').expect("already checked contains '/'");
         build_clone_url(&git.host, org, package, git.protocol)
     } else {
         // Direct package name — requires organization in config
@@ -262,10 +259,14 @@ pub fn create(path: &str, name: Option<&str>) -> Result<()> {
     }
 
     // Create the workspace directory (and any parent directories)
-    fs::create_dir_all(&target).with_context(|| {
+    fs::create_dir_all(&target)
+        .with_context(|| format!("could not create workspace directory: {}", target.display()))?;
+
+    // Create the src/ directory for packages
+    fs::create_dir_all(target.join("src")).with_context(|| {
         format!(
-            "could not create workspace directory: {}",
-            target.display()
+            "could not create src directory: {}",
+            target.join("src").display()
         )
     })?;
 
@@ -282,11 +283,7 @@ pub fn create(path: &str, name: Option<&str>) -> Result<()> {
         s.green.apply_to("✔"),
         s.bold.apply_to(&meta.name)
     );
-    println!(
-        "  {}  {}",
-        s.dim.apply_to("Location:"),
-        target.display()
-    );
+    println!("  {}  {}", s.dim.apply_to("Location:"), target.display());
     println!();
 
     Ok(())
@@ -300,10 +297,7 @@ pub fn remove(query: &str, force: bool) -> Result<()> {
     let target = find_workspace(query)?;
 
     let meta = read_meta(&target);
-    let display_name = meta
-        .as_ref()
-        .map(|m| m.name.as_str())
-        .unwrap_or(query);
+    let display_name = meta.as_ref().map(|m| m.name.as_str()).unwrap_or(query);
 
     if !force {
         println!();
@@ -324,12 +318,8 @@ pub fn remove(query: &str, force: bool) -> Result<()> {
         }
     }
 
-    fs::remove_dir_all(&target).with_context(|| {
-        format!(
-            "could not remove workspace directory: {}",
-            target.display()
-        )
-    })?;
+    fs::remove_dir_all(&target)
+        .with_context(|| format!("could not remove workspace directory: {}", target.display()))?;
 
     println!();
     println!(
@@ -356,9 +346,8 @@ pub fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
         None => find_workspace_from_cwd()?,
     };
 
-    let mut meta = read_meta(&ws_root).context(
-        "could not read workspace metadata — is this a valid buona workspace?",
-    )?;
+    let mut meta = read_meta(&ws_root)
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
     let src_dir = ws_root.join("src");
 
@@ -378,12 +367,7 @@ pub fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
             Ok(r) => r,
             Err(e) => {
                 failures.push((spec.clone(), format!("{e}")));
-                println!(
-                    "  {} {} — {}",
-                    s.red.apply_to("✘"),
-                    spec,
-                    e
-                );
+                println!("  {} {} — {}", s.red.apply_to("✘"), spec, e);
                 continue;
             }
         };
@@ -397,9 +381,8 @@ pub fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
         }
 
         // Ensure src/ directory exists
-        fs::create_dir_all(&src_dir).with_context(|| {
-            format!("could not create src directory: {}", src_dir.display())
-        })?;
+        fs::create_dir_all(&src_dir)
+            .with_context(|| format!("could not create src directory: {}", src_dir.display()))?;
 
         println!(
             "  {} Cloning {} ...",
@@ -428,12 +411,7 @@ pub fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let msg = stderr.trim().to_string();
             failures.push((spec.clone(), msg.clone()));
-            println!(
-                "  {} {} — {}",
-                s.red.apply_to("✘"),
-                spec,
-                msg
-            );
+            println!("  {} {} — {}", s.red.apply_to("✘"), spec, msg);
         }
     }
 
@@ -446,11 +424,7 @@ pub fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
     // Print summary
     println!();
     if !failures.is_empty() {
-        println!(
-            "  {} added, {} failed",
-            successes.len(),
-            failures.len()
-        );
+        println!("  {} added, {} failed", successes.len(), failures.len());
     } else {
         println!(
             "  {} {} package{} added",
@@ -489,18 +463,19 @@ mod tests {
     fn workspace_meta_with_packages_round_trips() {
         let meta = WorkspaceMeta {
             name: "my-project".to_string(),
-            packages: vec![
-                PackageEntry {
-                    name: "toolkit".to_string(),
-                    url: "git@github.com:acme/toolkit.git".to_string(),
-                },
-            ],
+            packages: vec![PackageEntry {
+                name: "toolkit".to_string(),
+                url: "git@github.com:acme/toolkit.git".to_string(),
+            }],
         };
         let json = serde_json::to_string_pretty(&meta).unwrap();
         let deserialized: WorkspaceMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.packages.len(), 1);
         assert_eq!(deserialized.packages[0].name, "toolkit");
-        assert_eq!(deserialized.packages[0].url, "git@github.com:acme/toolkit.git");
+        assert_eq!(
+            deserialized.packages[0].url,
+            "git@github.com:acme/toolkit.git"
+        );
     }
 
     #[test]
@@ -655,8 +630,7 @@ mod tests {
     #[test]
     fn resolve_full_https_url() {
         let git = test_git_config();
-        let result =
-            resolve_package_spec("https://github.com/other/repo.git", &git).unwrap();
+        let result = resolve_package_spec("https://github.com/other/repo.git", &git).unwrap();
         assert_eq!(result.url, "https://github.com/other/repo.git");
         assert_eq!(result.name, "repo");
     }
@@ -664,8 +638,7 @@ mod tests {
     #[test]
     fn resolve_full_ssh_url() {
         let git = test_git_config();
-        let result =
-            resolve_package_spec("git@github.com:other/repo.git", &git).unwrap();
+        let result = resolve_package_spec("git@github.com:other/repo.git", &git).unwrap();
         assert_eq!(result.url, "git@github.com:other/repo.git");
         assert_eq!(result.name, "repo");
     }
@@ -674,8 +647,7 @@ mod tests {
     fn resolve_full_url_ignores_config_org() {
         let mut git = test_git_config();
         git.organization = String::new(); // no org configured
-        let result =
-            resolve_package_spec("https://github.com/other/repo.git", &git).unwrap();
+        let result = resolve_package_spec("https://github.com/other/repo.git", &git).unwrap();
         assert_eq!(result.url, "https://github.com/other/repo.git");
         assert_eq!(result.name, "repo");
     }
