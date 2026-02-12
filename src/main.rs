@@ -117,6 +117,17 @@ enum WorkspaceCommands {
         #[arg(short, long)]
         workspace: Option<String>,
     },
+
+    /// Show detailed information about a workspace
+    Info {
+        /// Workspace name or directory (defaults to detecting from the current directory)
+        #[arg(short, long)]
+        workspace: Option<String>,
+
+        /// Print info as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -168,6 +179,9 @@ fn main() -> anyhow::Result<()> {
             }
             WorkspaceCommands::Open { workspace } => {
                 workspace::open(workspace.as_deref())?;
+            }
+            WorkspaceCommands::Info { workspace, json } => {
+                workspace::info(workspace.as_deref(), json)?;
             }
         },
     }

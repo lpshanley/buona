@@ -5,4 +5,4 @@ mod ops;
 mod types;
 mod vscode;
 
-pub(crate) use ops::{add, create, delete, list, open, remove_packages, sync};
+pub(crate) use ops::{add, create, delete, info, list, open, remove_packages, sync};

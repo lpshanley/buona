@@ -702,6 +702,103 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
     Ok(ws_file_path)
 }
 
+/// Pretty-print detailed information about a workspace.
+///
+/// Shows workspace name, directory location, tracked packages (with their
+/// clone URLs and on-disk status), and the `.code-workspace` file path.
+///
+/// If `workspace` is provided, it is looked up by name or directory.
+/// Otherwise, the workspace is detected from the current working directory.
+pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
+    let s = Styles::default();
+
+    // Resolve the workspace root
+    let ws_root = match workspace {
+        Some(name) => find_workspace(name)?,
+        None => find_workspace_from_cwd()?,
+    };
+
+    let meta = read_meta(&ws_root)?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+
+    if json {
+        let json = serde_json::to_string_pretty(&meta)?;
+        println!("{json}");
+        return Ok(());
+    }
+
+    let src_dir = ws_root.join("src");
+
+    // Derive the .code-workspace filename
+    let sanitized = sanitize_name(&meta.name);
+    let ws_file = format!("{sanitized}.code-workspace");
+    let ws_file_path = ws_root.join(&ws_file);
+
+    println!();
+    println!("  {}", s.bold.apply_to("Workspace Info"));
+    println!("  {}", s.dim.apply_to("──────────────"));
+    println!(
+        "  {}  {}",
+        s.cyan.apply_to("Name:"),
+        s.bold.apply_to(&meta.name)
+    );
+    println!(
+        "  {}  {}",
+        s.cyan.apply_to("Directory:"),
+        ws_root.display()
+    );
+    println!(
+        "  {}  {} {}",
+        s.cyan.apply_to("Workspace file:"),
+        ws_file,
+        if ws_file_path.exists() {
+            s.green.apply_to("(exists)").to_string()
+        } else {
+            s.dim.apply_to("(not generated)").to_string()
+        }
+    );
+    println!(
+        "  {}  {}",
+        s.cyan.apply_to("Packages:"),
+        meta.packages.len()
+    );
+
+    if !meta.packages.is_empty() {
+        println!();
+        println!("  {}", s.bold.apply_to("Packages"));
+        println!("  {}", s.dim.apply_to("──────────────"));
+
+        for pkg in &meta.packages {
+            let pkg_dir = src_dir.join(&pkg.name);
+            let status = if pkg_dir.exists() {
+                s.green.apply_to("✔ cloned").to_string()
+            } else {
+                s.red.apply_to("✘ missing").to_string()
+            };
+
+            println!(
+                "  {}  {}  {}",
+                s.cyan.apply_to("•"),
+                s.bold.apply_to(&pkg.name),
+                status
+            );
+            println!(
+                "     {}  {}",
+                s.dim.apply_to("url:"),
+                s.dim.apply_to(&pkg.url)
+            );
+            println!(
+                "     {}  {}",
+                s.dim.apply_to("dir:"),
+                s.dim.apply_to(pkg_dir.display().to_string())
+            );
+        }
+    }
+
+    println!();
+    Ok(())
+}
+
 /// Open a workspace in the configured editor.
 ///
 /// Regenerates the `.code-workspace` file and then launches the editor.

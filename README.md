@@ -6,7 +6,7 @@
 
 ## Features
 
-- **Workspace management** — Create, list, and delete workspaces.
+- **Workspace management** — Create, list, inspect, and delete workspaces.
 - **Package management** — Add and remove packages (git repositories) within workspaces.
 - **Automatic workspace file sync** — The `.code-workspace` file is automatically regenerated whenever packages are added, removed, or a workspace is created — no manual sync step needed.
 - **Sync & pull** — Pull the latest changes for every package in a workspace with a single command.
@@ -131,7 +131,21 @@ buona ws sync -p toolkit --fetch
 
 This runs `git pull` (or `git fetch` with `--fetch`) in each package directory under `src/` and reports results. When `-p` is omitted, all tracked packages are synced.
 
-### 7. Open a workspace in your editor
+### 7. View workspace details
+
+```sh
+buona ws info
+
+# Or target a specific workspace
+buona ws info --workspace my-project
+
+# Output as JSON (useful for scripting)
+buona ws info --json
+```
+
+Shows detailed information about a workspace: its name, directory, `.code-workspace` file status, and all tracked packages with their clone URLs and on-disk status.
+
+### 8. Open a workspace in your editor
 
 ```sh
 buona ws open
@@ -142,7 +156,7 @@ buona ws open --workspace my-project
 
 This regenerates the `.code-workspace` file and opens it in your configured editor (VS Code or Cursor).
 
-### 8. Delete a workspace
+### 9. Delete a workspace
 
 ```sh
 buona workspace delete my-project
@@ -183,6 +197,7 @@ Commands:
   remove  Remove packages from a workspace
   sync    Pull latest changes for all packages and sync the workspace file
   open    Open workspace in the configured editor
+  info    Show detailed information about a workspace
 ```
 
 #### `buona workspace create`
@@ -240,6 +255,14 @@ buona workspace open [--workspace <NAME>]
 ```
 
 Regenerates the `.code-workspace` file and opens it in your configured editor (VS Code or Cursor).
+
+#### `buona workspace info`
+
+```
+buona workspace info [--workspace <NAME>] [--json]
+```
+
+Displays detailed information about a workspace, including its name, directory path, `.code-workspace` file status, and all tracked packages with their URLs and on-disk clone status. Pass `--json` to output the raw workspace metadata as JSON.
 
 ## Configuration
 
