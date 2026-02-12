@@ -1,3 +1,8 @@
+//! Global configuration management.
+//!
+//! Handles reading, writing, and interactive setup of the global config file
+//! at `~/.config/buona/config.json`.
+
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
@@ -9,10 +14,11 @@ use serde::{Deserialize, Serialize};
 use crate::styles::Styles;
 
 /// Supported IDE options.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Ide {
+pub(crate) enum Ide {
     /// Visual Studio Code
+    #[default]
     Vscode,
     /// Cursor
     Cursor,
@@ -20,20 +26,14 @@ pub enum Ide {
 
 impl Ide {
     /// All variants in display order.
-    pub const ALL: [Ide; 2] = [Ide::Vscode, Ide::Cursor];
+    pub(crate) const ALL: [Ide; 2] = [Ide::Vscode, Ide::Cursor];
 
     /// Returns the CLI command name used to launch this editor.
-    pub fn command(&self) -> &'static str {
+    pub(crate) fn command(&self) -> &'static str {
         match self {
             Ide::Vscode => "code",
             Ide::Cursor => "cursor",
         }
-    }
-}
-
-impl Default for Ide {
-    fn default() -> Self {
-        Ide::Vscode
     }
 }
 
@@ -47,10 +47,11 @@ impl fmt::Display for Ide {
 }
 
 /// Supported git protocols.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum GitProtocol {
+pub(crate) enum GitProtocol {
     /// SSH (e.g. git@github.com:org/repo.git)
+    #[default]
     Ssh,
     /// HTTPS (e.g. https://github.com/org/repo.git)
     Https,
@@ -58,13 +59,7 @@ pub enum GitProtocol {
 
 impl GitProtocol {
     /// All variants in display order.
-    pub const ALL: [GitProtocol; 2] = [GitProtocol::Ssh, GitProtocol::Https];
-}
-
-impl Default for GitProtocol {
-    fn default() -> Self {
-        GitProtocol::Ssh
-    }
+    pub(crate) const ALL: [GitProtocol; 2] = [GitProtocol::Ssh, GitProtocol::Https];
 }
 
 impl fmt::Display for GitProtocol {
@@ -78,18 +73,18 @@ impl fmt::Display for GitProtocol {
 
 /// Default git settings (host, organization, protocol).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GitConfig {
+pub(crate) struct GitConfig {
     /// The git host (e.g. "github.com" or a GitHub Enterprise host).
     #[serde(default = "default_git_host")]
-    pub host: String,
+    pub(crate) host: String,
 
     /// The default organization on the host (e.g. "my-org").
     #[serde(default)]
-    pub organization: String,
+    pub(crate) organization: String,
 
     /// The protocol used to clone/push (SSH or HTTPS).
     #[serde(default)]
-    pub protocol: GitProtocol,
+    pub(crate) protocol: GitProtocol,
 }
 
 fn default_git_host() -> String {
@@ -106,17 +101,17 @@ impl Default for GitConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BuonaConfig {
-    pub workspace_dir: String,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct BuonaConfig {
+    pub(crate) workspace_dir: String,
 
     /// The user's preferred IDE.
     #[serde(default)]
-    pub ide: Ide,
+    pub(crate) ide: Ide,
 
     /// Default git settings.
     #[serde(default)]
-    pub git: GitConfig,
+    pub(crate) git: GitConfig,
 }
 
 impl Default for BuonaConfig {
@@ -130,7 +125,7 @@ impl Default for BuonaConfig {
 }
 
 /// Expand a leading `~` to the user's home directory.
-pub fn expand_tilde(path: &str) -> Result<PathBuf> {
+pub(crate) fn expand_tilde(path: &str) -> Result<PathBuf> {
     if let Some(rest) = path.strip_prefix("~/") {
         let home = dirs::home_dir().context("could not determine home directory")?;
         Ok(home.join(rest))
@@ -142,24 +137,24 @@ pub fn expand_tilde(path: &str) -> Result<PathBuf> {
 }
 
 /// Resolve the workspace directory from the config, expanding `~`.
-pub fn workspace_dir() -> Result<PathBuf> {
+pub(crate) fn workspace_dir() -> Result<PathBuf> {
     let cfg = load_config()?;
     expand_tilde(&cfg.workspace_dir)
 }
 
 /// Returns the buona config directory: ~/.config/buona/
-pub fn config_dir() -> Result<PathBuf> {
+pub(crate) fn config_dir() -> Result<PathBuf> {
     let dir = dirs::config_dir().context("could not determine config directory")?;
     Ok(dir.join("buona"))
 }
 
 /// Returns the path to the config file: ~/.config/buona/config.json
-pub fn config_file_path() -> Result<PathBuf> {
+pub(crate) fn config_file_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.json"))
 }
 
 /// Load the config from disk. If the file doesn't exist, returns the default config.
-pub fn load_config() -> Result<BuonaConfig> {
+pub(crate) fn load_config() -> Result<BuonaConfig> {
     let path = config_file_path()?;
     if path.exists() {
         let contents = fs::read_to_string(&path)
@@ -173,7 +168,7 @@ pub fn load_config() -> Result<BuonaConfig> {
 }
 
 /// Save the config to disk, creating parent directories if needed.
-pub fn save_config(config: &BuonaConfig) -> Result<()> {
+pub(crate) fn save_config(config: &BuonaConfig) -> Result<()> {
     let path = config_file_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -186,7 +181,7 @@ pub fn save_config(config: &BuonaConfig) -> Result<()> {
 }
 
 /// Pretty-print the current configuration to the terminal.
-pub fn print_pretty(config: &BuonaConfig) -> Result<()> {
+pub(crate) fn print_pretty(config: &BuonaConfig) -> Result<()> {
     let s = Styles::default();
 
     let path = config_file_path()?;
@@ -250,14 +245,14 @@ pub fn print_pretty(config: &BuonaConfig) -> Result<()> {
 }
 
 /// Print the configuration as JSON.
-pub fn print_json(config: &BuonaConfig) -> Result<()> {
+pub(crate) fn print_json(config: &BuonaConfig) -> Result<()> {
     let json = serde_json::to_string_pretty(config)?;
     println!("{json}");
     Ok(())
 }
 
 /// Run the interactive setup wizard.
-pub fn run_setup() -> Result<()> {
+pub(crate) fn run_setup() -> Result<()> {
     let current = load_config()?;
     let s = Styles::default();
 

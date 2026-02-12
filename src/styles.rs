@@ -1,11 +1,14 @@
+//! Terminal styling utilities for consistent output formatting.
+
 use console::Style;
 
-pub struct Styles {
-    pub bold: Style,
-    pub dim: Style,
-    pub cyan: Style,
-    pub green: Style,
-    pub red: Style,
+#[derive(Debug)]
+pub(crate) struct Styles {
+    pub(crate) bold: Style,
+    pub(crate) dim: Style,
+    pub(crate) cyan: Style,
+    pub(crate) green: Style,
+    pub(crate) red: Style,
 }
 
 impl Default for Styles {

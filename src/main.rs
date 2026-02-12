@@ -1,6 +1,10 @@
+//! CLI entry point for the buona workspace manager.
+
 mod config;
 mod styles;
 mod workspace;
+
+use std::path::Path;
 
 use clap::{Parser, Subcommand};
 
@@ -114,7 +118,7 @@ fn main() -> anyhow::Result<()> {
                 workspace::list()?;
             }
             WorkspaceCommands::Create { path, name } => {
-                workspace::create(&path, name.as_deref())?;
+                workspace::create(Path::new(&path), name.as_deref())?;
             }
             WorkspaceCommands::Remove { workspace, force } => {
                 workspace::remove(&workspace, force)?;
