@@ -42,6 +42,26 @@ enum Commands {
 enum WorkspaceCommands {
     /// List all workspaces in the configured directory
     List,
+
+    /// Create a new workspace
+    Create {
+        /// Path for the new workspace (relative to the configured workspace directory, or absolute)
+        path: String,
+
+        /// Optional display name for the workspace (defaults to the directory name)
+        #[arg(short, long)]
+        name: Option<String>,
+    },
+
+    /// Remove a workspace
+    Remove {
+        /// Name or directory of the workspace to remove
+        workspace: String,
+
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 fn main() {
@@ -66,6 +86,12 @@ fn main() {
         Commands::Workspace { command } => match command {
             WorkspaceCommands::List => {
                 workspace::list();
+            }
+            WorkspaceCommands::Create { path, name } => {
+                workspace::create(&path, name.as_deref());
+            }
+            WorkspaceCommands::Remove { workspace, force } => {
+                workspace::remove(&workspace, force);
             }
         },
     }
