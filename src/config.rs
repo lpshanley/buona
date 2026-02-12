@@ -18,6 +18,25 @@ impl Default for BuonaConfig {
     }
 }
 
+/// Expand a leading `~` to the user's home directory.
+pub fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        dirs::home_dir()
+            .expect("Could not determine home directory")
+            .join(rest)
+    } else if path == "~" {
+        dirs::home_dir().expect("Could not determine home directory")
+    } else {
+        PathBuf::from(path)
+    }
+}
+
+/// Resolve the workspace directory from the config, expanding `~`.
+pub fn workspace_dir() -> PathBuf {
+    let cfg = load_config();
+    expand_tilde(&cfg.workspace_dir)
+}
+
 /// Returns the buona config directory: ~/.config/buona/
 pub fn config_dir() -> PathBuf {
     dirs::config_dir()

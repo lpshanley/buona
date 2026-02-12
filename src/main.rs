@@ -1,4 +1,5 @@
 mod config;
+mod workspace;
 
 use clap::{Parser, Subcommand};
 
@@ -28,6 +29,19 @@ enum Commands {
         #[arg(long)]
         setup: bool,
     },
+
+    /// Manage workspaces
+    #[command(alias = "ws", arg_required_else_help = true)]
+    Workspace {
+        #[command(subcommand)]
+        command: WorkspaceCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkspaceCommands {
+    /// List all workspaces in the configured directory
+    List,
 }
 
 fn main() {
@@ -49,5 +63,10 @@ fn main() {
                 }
             }
         }
+        Commands::Workspace { command } => match command {
+            WorkspaceCommands::List => {
+                workspace::list();
+            }
+        },
     }
 }

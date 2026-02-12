@@ -6,6 +6,10 @@ run *args:
 config *args:
     cargo run -- config {{args}}
 
+# Run buona workspace with optional arguments
+workspace *args:
+    cargo run -- workspace {{args}}
+
 # Install buona to the global Cargo bin (~/.cargo/bin)
 install:
     cargo install --path .
