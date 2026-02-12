@@ -38,6 +38,66 @@ impl fmt::Display for Ide {
     }
 }
 
+/// Supported git protocols.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GitProtocol {
+    /// SSH (e.g. git@github.com:org/repo.git)
+    Ssh,
+    /// HTTPS (e.g. https://github.com/org/repo.git)
+    Https,
+}
+
+impl GitProtocol {
+    /// All variants in display order.
+    pub const ALL: [GitProtocol; 2] = [GitProtocol::Ssh, GitProtocol::Https];
+}
+
+impl Default for GitProtocol {
+    fn default() -> Self {
+        GitProtocol::Ssh
+    }
+}
+
+impl fmt::Display for GitProtocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GitProtocol::Ssh => write!(f, "SSH"),
+            GitProtocol::Https => write!(f, "HTTPS"),
+        }
+    }
+}
+
+/// Default git settings (host, organization, protocol).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitConfig {
+    /// The git host (e.g. "github.com" or a GitHub Enterprise host).
+    #[serde(default = "default_git_host")]
+    pub host: String,
+
+    /// The default organization on the host (e.g. "my-org").
+    #[serde(default)]
+    pub organization: String,
+
+    /// The protocol used to clone/push (SSH or HTTPS).
+    #[serde(default)]
+    pub protocol: GitProtocol,
+}
+
+fn default_git_host() -> String {
+    "github.com".to_string()
+}
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self {
+            host: default_git_host(),
+            organization: String::new(),
+            protocol: GitProtocol::default(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuonaConfig {
     pub workspace_dir: String,
@@ -45,6 +105,10 @@ pub struct BuonaConfig {
     /// The user's preferred IDE.
     #[serde(default)]
     pub ide: Ide,
+
+    /// Default git settings.
+    #[serde(default)]
+    pub git: GitConfig,
 }
 
 impl Default for BuonaConfig {
@@ -52,6 +116,7 @@ impl Default for BuonaConfig {
         Self {
             workspace_dir: "~/workspace".to_string(),
             ide: Ide::default(),
+            git: GitConfig::default(),
         }
     }
 }
@@ -133,6 +198,28 @@ pub fn print_pretty(config: &BuonaConfig) -> Result<()> {
         config.ide
     );
     println!();
+    println!("  {}", s.bold.apply_to("Git Defaults"));
+    println!("  {}", s.dim.apply_to("───────────────────"));
+    println!(
+        "  {}  {}",
+        s.cyan.apply_to("Host:"),
+        config.git.host
+    );
+    println!(
+        "  {}  {}",
+        s.cyan.apply_to("Organization:"),
+        if config.git.organization.is_empty() {
+            "(not set)".to_string()
+        } else {
+            config.git.organization.clone()
+        }
+    );
+    println!(
+        "  {}  {}",
+        s.cyan.apply_to("Protocol:"),
+        config.git.protocol
+    );
+    println!();
 
     if !file_exists {
         println!(
@@ -192,9 +279,50 @@ pub fn run_setup() -> Result<()> {
 
     let ide = Ide::ALL[ide_index];
 
+    println!();
+    println!("  {} Git Defaults", s.bold.apply_to("🔗"));
+    println!("  {}", s.dim.apply_to("───────────────────────────"));
+    println!();
+
+    let git_host: String = Input::new()
+        .with_prompt(format!("  {}", s.bold.apply_to("Git host")))
+        .default(current.git.host)
+        .interact_text()
+        .context("failed to read input")?;
+
+    let git_org: String = Input::new()
+        .with_prompt(format!("  {}", s.bold.apply_to("Default organization")))
+        .default(current.git.organization)
+        .allow_empty(true)
+        .interact_text()
+        .context("failed to read input")?;
+
+    let protocol_options: Vec<String> = GitProtocol::ALL
+        .iter()
+        .map(|p| p.to_string())
+        .collect();
+    let protocol_default = GitProtocol::ALL
+        .iter()
+        .position(|&p| p == current.git.protocol)
+        .unwrap_or(0);
+
+    let protocol_index = Select::new()
+        .with_prompt(format!("  {}", s.bold.apply_to("Git protocol")))
+        .items(&protocol_options)
+        .default(protocol_default)
+        .interact()
+        .context("failed to read input")?;
+
+    let git_protocol = GitProtocol::ALL[protocol_index];
+
     let config = BuonaConfig {
         workspace_dir,
         ide,
+        git: GitConfig {
+            host: git_host,
+            organization: git_org,
+            protocol: git_protocol,
+        },
     };
 
     save_config(&config)?;
@@ -247,6 +375,7 @@ mod tests {
         let deserialized: BuonaConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.workspace_dir, config.workspace_dir);
         assert_eq!(deserialized.ide, config.ide);
+        assert_eq!(deserialized.git, config.git);
     }
 
     #[test]
@@ -291,9 +420,104 @@ mod tests {
         let config = BuonaConfig {
             workspace_dir: "~/work".to_string(),
             ide: Ide::Cursor,
+            git: GitConfig::default(),
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: BuonaConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.ide, Ide::Cursor);
+    }
+
+    // ── GitProtocol tests ──────────────────────────────────────────
+
+    #[test]
+    fn default_git_protocol_is_ssh() {
+        assert_eq!(GitProtocol::default(), GitProtocol::Ssh);
+    }
+
+    #[test]
+    fn git_protocol_display_ssh() {
+        assert_eq!(GitProtocol::Ssh.to_string(), "SSH");
+    }
+
+    #[test]
+    fn git_protocol_display_https() {
+        assert_eq!(GitProtocol::Https.to_string(), "HTTPS");
+    }
+
+    #[test]
+    fn git_protocol_serializes_to_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&GitProtocol::Ssh).unwrap(),
+            "\"ssh\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GitProtocol::Https).unwrap(),
+            "\"https\""
+        );
+    }
+
+    #[test]
+    fn git_protocol_deserializes_from_lowercase() {
+        let ssh: GitProtocol = serde_json::from_str("\"ssh\"").unwrap();
+        assert_eq!(ssh, GitProtocol::Ssh);
+
+        let https: GitProtocol = serde_json::from_str("\"https\"").unwrap();
+        assert_eq!(https, GitProtocol::Https);
+    }
+
+    // ── GitConfig tests ────────────────────────────────────────────
+
+    #[test]
+    fn default_git_config_has_github_host() {
+        let git = GitConfig::default();
+        assert_eq!(git.host, "github.com");
+        assert_eq!(git.organization, "");
+        assert_eq!(git.protocol, GitProtocol::Ssh);
+    }
+
+    #[test]
+    fn git_config_round_trips_through_serde() {
+        let git = GitConfig {
+            host: "git.example.com".to_string(),
+            organization: "my-org".to_string(),
+            protocol: GitProtocol::Https,
+        };
+        let json = serde_json::to_string(&git).unwrap();
+        let deserialized: GitConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, git);
+    }
+
+    #[test]
+    fn config_without_git_field_gets_defaults() {
+        let json = r#"{"workspace_dir": "~/workspace"}"#;
+        let config: BuonaConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.git, GitConfig::default());
+    }
+
+    #[test]
+    fn config_with_partial_git_gets_defaults_for_missing() {
+        let json = r#"{"workspace_dir": "~/workspace", "git": {"host": "git.corp.com"}}"#;
+        let config: BuonaConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.git.host, "git.corp.com");
+        assert_eq!(config.git.organization, "");
+        assert_eq!(config.git.protocol, GitProtocol::Ssh);
+    }
+
+    #[test]
+    fn config_with_full_git_round_trips() {
+        let config = BuonaConfig {
+            workspace_dir: "~/work".to_string(),
+            ide: Ide::Cursor,
+            git: GitConfig {
+                host: "github.example.com".to_string(),
+                organization: "engineering".to_string(),
+                protocol: GitProtocol::Https,
+            },
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: BuonaConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.git.host, "github.example.com");
+        assert_eq!(deserialized.git.organization, "engineering");
+        assert_eq!(deserialized.git.protocol, GitProtocol::Https);
     }
 }

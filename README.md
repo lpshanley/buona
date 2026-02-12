@@ -102,9 +102,13 @@ Commands:
 
 Buona stores its configuration at `~/.config/buona/config.json`. The current settings:
 
-| Key             | Description                                  | Default        |
-|-----------------|----------------------------------------------|----------------|
-| `workspace_dir` | Root directory where workspaces are created   | `~/workspace`  |
+| Key                | Description                                  | Default        |
+|--------------------|----------------------------------------------|----------------|
+| `workspace_dir`    | Root directory where workspaces are created   | `~/workspace`  |
+| `ide`              | Preferred IDE (`vscode` or `cursor`)          | `vscode`       |
+| `git.host`         | Default git host                              | `github.com`   |
+| `git.organization` | Default organization on the git host          | *(empty)*      |
+| `git.protocol`     | Clone/push protocol (`ssh` or `https`)        | `ssh`          |
 
 ## Workspace metadata
 
