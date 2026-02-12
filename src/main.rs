@@ -5,7 +5,7 @@ mod workspace;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "buona", version, about = "A CLI tool", arg_required_else_help = true)]
+#[command(name = "buona", version, about = "The Good CLI — making life easier when managing complex workspace and build tasks", arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

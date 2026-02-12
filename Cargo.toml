@@ -2,6 +2,9 @@
 name = "buona"
 version = "0.1.0"
 edition = "2024"
+description = "The Good CLI — making life easier when managing complex workspace and build tasks"
+license = "MIT"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1"
