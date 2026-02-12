@@ -6,7 +6,7 @@
 
 ## Features
 
-- **Workspace management** — Create, list, and remove workspaces from a central directory.
+- **Workspace management** — Create, list, remove workspaces, and add packages to them.
 - **Global configuration** — A simple config file (`~/.config/buona/config.json`) keeps your preferences consistent across projects.
 - **Interactive setup** — A guided wizard walks you through first-time configuration.
 - **Minimal & fast** — Built in Rust with a small dependency footprint.
@@ -59,7 +59,35 @@ buona workspace create my-project --name "My Project"
 buona workspace list
 ```
 
-### 4. Remove a workspace
+### 4. Add packages to a workspace
+
+From inside a workspace directory, add one or more packages:
+
+```sh
+cd ~/workspace/my-project
+
+# By name (uses configured host, protocol, and organization)
+buona ws add -p my-library
+
+# By org/name (uses configured host and protocol)
+buona ws add -p acme/toolkit
+
+# By full URL
+buona ws add -p git@github.com:acme/toolkit.git
+
+# Multiple packages at once
+buona ws add -p my-library -p acme/toolkit -p git@github.com:other/repo.git
+```
+
+Packages are cloned into the workspace's `src/` directory and tracked in `buona.workspace.json`.
+
+You can also target a workspace by name instead of being inside it:
+
+```sh
+buona ws add -p my-library --workspace my-project
+```
+
+### 5. Remove a workspace
 
 ```sh
 buona workspace remove my-project
@@ -96,7 +124,24 @@ Commands:
   list    List all workspaces in the configured directory
   create  Create a new workspace
   remove  Remove a workspace
+  add     Add packages to a workspace
 ```
+
+#### `buona workspace add`
+
+```
+buona workspace add -p <PACKAGE>... [--workspace <NAME>]
+```
+
+The `-p` flag accepts three package specifier formats:
+
+| Format | Example | Resolution |
+|--------|---------|------------|
+| Package name | `my-library` | Uses configured `git.host`, `git.protocol`, and `git.organization` |
+| Org/Package | `acme/toolkit` | Uses configured `git.host` and `git.protocol` |
+| Full URL | `git@github.com:acme/toolkit.git` | Used directly |
+
+Pass `-p` multiple times to add several packages in one command. Packages are cloned into the workspace's `src/` directory.
 
 ## Configuration
 
@@ -120,7 +165,21 @@ Each workspace contains a `buona.workspace.json` file:
 }
 ```
 
-This file is used by buona to track workspace names and can be extended in the future with additional metadata.
+When packages are added via `buona ws add`, they are tracked in this file:
+
+```json
+{
+  "name": "my-project",
+  "packages": [
+    {
+      "name": "toolkit",
+      "url": "git@github.com:acme/toolkit.git"
+    }
+  ]
+}
+```
+
+The `packages` field is omitted when empty, so existing workspaces remain compatible.
 
 ## Development
 

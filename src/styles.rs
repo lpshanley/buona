@@ -5,6 +5,7 @@ pub struct Styles {
     pub dim: Style,
     pub cyan: Style,
     pub green: Style,
+    pub red: Style,
 }
 
 impl Default for Styles {
@@ -14,6 +15,7 @@ impl Default for Styles {
             dim: Style::new().dim(),
             cyan: Style::new().cyan().bold(),
             green: Style::new().green().bold(),
+            red: Style::new().red().bold(),
         }
     }
 }

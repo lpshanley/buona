@@ -65,6 +65,17 @@ enum WorkspaceCommands {
         #[arg(short, long)]
         force: bool,
     },
+
+    /// Add packages to a workspace
+    Add {
+        /// Package specifier(s): name, org/name, or a full git URL
+        #[arg(short = 'p', long = "package", required = true)]
+        packages: Vec<String>,
+
+        /// Workspace name or directory (defaults to detecting from the current directory)
+        #[arg(short, long)]
+        workspace: Option<String>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -93,6 +104,12 @@ fn main() -> anyhow::Result<()> {
             }
             WorkspaceCommands::Remove { workspace, force } => {
                 workspace::remove(&workspace, force)?;
+            }
+            WorkspaceCommands::Add {
+                packages,
+                workspace,
+            } => {
+                workspace::add(&packages, workspace.as_deref())?;
             }
         },
     }
