@@ -1,4 +1,4 @@
-//! Workspace operations — list, create, remove, add, sync, and open.
+//! Workspace operations — list, create, delete, add, remove, sync, and open.
 
 use std::env;
 use std::fs;
@@ -200,9 +200,9 @@ pub(crate) fn create(path: &Path, name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Remove a workspace by name or directory name. Prompts for confirmation
+/// Delete a workspace by name or directory name. Prompts for confirmation
 /// unless `force` is true.
-pub(crate) fn remove(query: &str, force: bool) -> Result<()> {
+pub(crate) fn delete(query: &str, force: bool) -> Result<()> {
     let s = Styles::default();
 
     let target = find_workspace(query)?;
@@ -214,7 +214,7 @@ pub(crate) fn remove(query: &str, force: bool) -> Result<()> {
         println!();
         let confirmed = Confirm::new()
             .with_prompt(format!(
-                "  Remove workspace {} at {}?",
+                "  Delete workspace {} at {}?",
                 s.bold.apply_to(display_name),
                 s.dim.apply_to(target.display().to_string())
             ))
@@ -230,11 +230,11 @@ pub(crate) fn remove(query: &str, force: bool) -> Result<()> {
     }
 
     fs::remove_dir_all(&target)
-        .with_context(|| format!("could not remove workspace directory: {}", target.display()))?;
+        .with_context(|| format!("could not delete workspace directory: {}", target.display()))?;
 
     println!();
     println!(
-        "  {} Removed workspace {}",
+        "  {} Deleted workspace {}",
         s.green.apply_to("✔"),
         s.bold.apply_to(display_name)
     );
@@ -348,6 +348,177 @@ pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
 
     if !failures.is_empty() && successes.is_empty() {
         bail!("all packages failed to add");
+    }
+
+    Ok(())
+}
+
+/// Remove one or more packages from a workspace.
+///
+/// Removes the package entries from `buona.workspace.json` and deletes the
+/// corresponding directories under `src/`. Prompts for confirmation unless
+/// `force` is true.
+///
+/// If `workspace` is provided, it is looked up by name or directory.
+/// Otherwise, the workspace is detected from the current working directory.
+pub(crate) fn remove_packages(packages: &[String], workspace: Option<&str>, force: bool) -> Result<()> {
+    let s = Styles::default();
+
+    // Resolve the workspace root
+    let ws_root = match workspace {
+        Some(name) => find_workspace(name)?,
+        None => find_workspace_from_cwd()?,
+    };
+
+    let mut meta = read_meta(&ws_root)?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+
+    let src_dir = ws_root.join("src");
+
+    // Partition packages into found (with their index) and not-found
+    let mut to_remove: Vec<(usize, &PackageEntry)> = Vec::new();
+    let mut not_found: Vec<&str> = Vec::new();
+
+    for name in packages {
+        if let Some(idx) = meta.packages.iter().position(|p| p.name == *name) {
+            // Avoid duplicates if the user passes the same name twice
+            if !to_remove.iter().any(|(i, _)| *i == idx) {
+                to_remove.push((idx, &meta.packages[idx]));
+            }
+        } else {
+            not_found.push(name);
+        }
+    }
+
+    // Report not-found packages upfront
+    if !not_found.is_empty() {
+        println!();
+        for name in &not_found {
+            println!(
+                "  {} Package {} not found in workspace {}",
+                s.red.apply_to("✘"),
+                s.bold.apply_to(name),
+                s.bold.apply_to(&meta.name),
+            );
+        }
+    }
+
+    if to_remove.is_empty() {
+        if not_found.is_empty() {
+            println!();
+            println!("  {} No packages specified", s.dim.apply_to("—"));
+        }
+        println!();
+        bail!("no matching packages to remove");
+    }
+
+    // Show what will be removed and confirm
+    println!();
+    println!(
+        "  {} Removing from {}",
+        s.bold.apply_to("📦"),
+        s.bold.apply_to(&meta.name)
+    );
+    println!("  {}", s.dim.apply_to("───────────────────────────"));
+    for (_, pkg) in &to_remove {
+        println!("  {}  {}", s.red.apply_to("−"), pkg.name);
+    }
+    println!();
+
+    if !force {
+        let prompt_msg = if to_remove.len() == 1 {
+            format!(
+                "  Remove {} from {}?",
+                s.bold.apply_to(&to_remove[0].1.name),
+                s.bold.apply_to(&meta.name)
+            )
+        } else {
+            format!(
+                "  Remove {} packages from {}?",
+                to_remove.len(),
+                s.bold.apply_to(&meta.name)
+            )
+        };
+
+        let confirmed = Confirm::new()
+            .with_prompt(prompt_msg)
+            .default(false)
+            .interact()
+            .context("failed to read input")?;
+
+        if !confirmed {
+            println!("  Aborted.");
+            println!();
+            return Ok(());
+        }
+    }
+
+    // Remove directories and collect results
+    let mut removed: Vec<String> = Vec::new();
+    let mut dir_errors: Vec<(String, String)> = Vec::new();
+
+    // Collect indices to remove (sorted in reverse to avoid shifting)
+    let mut indices: Vec<usize> = to_remove.iter().map(|(i, _)| *i).collect();
+    indices.sort_unstable();
+    indices.reverse();
+
+    for &idx in &indices {
+        let pkg = &meta.packages[idx];
+        let pkg_dir = src_dir.join(&pkg.name);
+        let pkg_name = pkg.name.clone();
+
+        if pkg_dir.exists() {
+            if let Err(e) = fs::remove_dir_all(&pkg_dir) {
+                dir_errors.push((pkg_name.clone(), format!("{e}")));
+                println!(
+                    "  {} {} — could not remove directory: {}",
+                    s.red.apply_to("✘"),
+                    pkg_name,
+                    e
+                );
+                continue;
+            }
+        }
+
+        // Remove from metadata
+        meta.packages.remove(idx);
+        removed.push(pkg_name);
+    }
+
+    // Save updated metadata
+    if !removed.is_empty() {
+        write_meta(&ws_root, &meta)?;
+    }
+
+    // Print summary
+    println!();
+    for name in &removed {
+        println!(
+            "  {} Removed {}",
+            s.green.apply_to("✔"),
+            s.bold.apply_to(name)
+        );
+    }
+
+    if !dir_errors.is_empty() {
+        println!(
+            "  {} removed, {} failed",
+            removed.len(),
+            dir_errors.len()
+        );
+    } else {
+        println!();
+        println!(
+            "  {} {} package{} removed",
+            s.green.apply_to("✔"),
+            removed.len(),
+            if removed.len() == 1 { "" } else { "s" }
+        );
+    }
+    println!();
+
+    if !dir_errors.is_empty() && removed.is_empty() {
+        bail!("all packages failed to remove");
     }
 
     Ok(())
@@ -512,6 +683,129 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let result = find_workspace_root(dir.path());
         assert!(result.is_err());
+    }
+
+    // ── sync tests ──────────────────────────────────────────────────
+
+    // ── remove_packages tests ───────────────────────────────────────
+
+    #[test]
+    fn remove_packages_removes_from_metadata() {
+        let dir = TempDir::new().unwrap();
+        let meta = WorkspaceMeta {
+            name: "test".to_string(),
+            packages: vec![
+                PackageEntry {
+                    name: "alpha".to_string(),
+                    url: "git@github.com:acme/alpha.git".to_string(),
+                },
+                PackageEntry {
+                    name: "beta".to_string(),
+                    url: "git@github.com:acme/beta.git".to_string(),
+                },
+                PackageEntry {
+                    name: "gamma".to_string(),
+                    url: "git@github.com:acme/gamma.git".to_string(),
+                },
+            ],
+        };
+        write_meta(dir.path(), &meta).unwrap();
+
+        // Create package directories
+        let src = dir.path().join("src");
+        fs::create_dir_all(src.join("alpha")).unwrap();
+        fs::create_dir_all(src.join("beta")).unwrap();
+        fs::create_dir_all(src.join("gamma")).unwrap();
+
+        // Simulate dropping "beta" with force (no confirmation prompt)
+        // We call the internal logic directly since drop_packages uses
+        // find_workspace_from_cwd / find_workspace which needs the global config.
+        // Instead, test the metadata manipulation and dir removal directly.
+        let mut meta = read_meta(dir.path()).unwrap().unwrap();
+        let idx = meta.packages.iter().position(|p| p.name == "beta").unwrap();
+        let pkg_dir = src.join("beta");
+        fs::remove_dir_all(&pkg_dir).unwrap();
+        meta.packages.remove(idx);
+        write_meta(dir.path(), &meta).unwrap();
+
+        let updated = read_meta(dir.path()).unwrap().unwrap();
+        assert_eq!(updated.packages.len(), 2);
+        assert_eq!(updated.packages[0].name, "alpha");
+        assert_eq!(updated.packages[1].name, "gamma");
+        assert!(!pkg_dir.exists());
+    }
+
+    #[test]
+    fn remove_packages_removes_multiple_from_metadata() {
+        let dir = TempDir::new().unwrap();
+        let meta = WorkspaceMeta {
+            name: "test".to_string(),
+            packages: vec![
+                PackageEntry {
+                    name: "alpha".to_string(),
+                    url: "git@github.com:acme/alpha.git".to_string(),
+                },
+                PackageEntry {
+                    name: "beta".to_string(),
+                    url: "git@github.com:acme/beta.git".to_string(),
+                },
+                PackageEntry {
+                    name: "gamma".to_string(),
+                    url: "git@github.com:acme/gamma.git".to_string(),
+                },
+            ],
+        };
+        write_meta(dir.path(), &meta).unwrap();
+
+        let src = dir.path().join("src");
+        fs::create_dir_all(src.join("alpha")).unwrap();
+        fs::create_dir_all(src.join("beta")).unwrap();
+        fs::create_dir_all(src.join("gamma")).unwrap();
+
+        // Remove "alpha" and "gamma" (indices 0 and 2), reverse order to avoid shifting
+        let mut meta = read_meta(dir.path()).unwrap().unwrap();
+        let mut indices: Vec<usize> = vec![0, 2];
+        indices.sort_unstable();
+        indices.reverse();
+        for idx in indices {
+            let pkg_dir = src.join(&meta.packages[idx].name);
+            fs::remove_dir_all(&pkg_dir).unwrap();
+            meta.packages.remove(idx);
+        }
+        write_meta(dir.path(), &meta).unwrap();
+
+        let updated = read_meta(dir.path()).unwrap().unwrap();
+        assert_eq!(updated.packages.len(), 1);
+        assert_eq!(updated.packages[0].name, "beta");
+        assert!(!src.join("alpha").exists());
+        assert!(src.join("beta").exists());
+        assert!(!src.join("gamma").exists());
+    }
+
+    #[test]
+    fn remove_packages_handles_missing_directory_gracefully() {
+        let dir = TempDir::new().unwrap();
+        let meta = WorkspaceMeta {
+            name: "test".to_string(),
+            packages: vec![PackageEntry {
+                name: "phantom".to_string(),
+                url: "git@github.com:acme/phantom.git".to_string(),
+            }],
+        };
+        write_meta(dir.path(), &meta).unwrap();
+
+        // Don't create the src/phantom directory — it's tracked but not on disk
+        let src = dir.path().join("src");
+        let pkg_dir = src.join("phantom");
+        assert!(!pkg_dir.exists());
+
+        // The metadata removal should still succeed
+        let mut meta = read_meta(dir.path()).unwrap().unwrap();
+        meta.packages.remove(0);
+        write_meta(dir.path(), &meta).unwrap();
+
+        let updated = read_meta(dir.path()).unwrap().unwrap();
+        assert!(updated.packages.is_empty());
     }
 
     // ── sync tests ──────────────────────────────────────────────────

@@ -60,9 +60,9 @@ enum WorkspaceCommands {
         name: Option<String>,
     },
 
-    /// Remove a workspace
-    Remove {
-        /// Name or directory of the workspace to remove
+    /// Delete a workspace
+    Delete {
+        /// Name or directory of the workspace to delete
         workspace: String,
 
         /// Skip the confirmation prompt
@@ -79,6 +79,21 @@ enum WorkspaceCommands {
         /// Workspace name or directory (defaults to detecting from the current directory)
         #[arg(short, long)]
         workspace: Option<String>,
+    },
+
+    /// Remove packages from a workspace
+    Remove {
+        /// Package name(s) to remove
+        #[arg(short = 'p', long = "package", required = true)]
+        packages: Vec<String>,
+
+        /// Workspace name or directory (defaults to detecting from the current directory)
+        #[arg(short, long)]
+        workspace: Option<String>,
+
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
+        force: bool,
     },
 
     /// Sync workspace metadata to a .code-workspace file
@@ -120,14 +135,21 @@ fn main() -> anyhow::Result<()> {
             WorkspaceCommands::Create { path, name } => {
                 workspace::create(Path::new(&path), name.as_deref())?;
             }
-            WorkspaceCommands::Remove { workspace, force } => {
-                workspace::remove(&workspace, force)?;
+            WorkspaceCommands::Delete { workspace, force } => {
+                workspace::delete(&workspace, force)?;
             }
             WorkspaceCommands::Add {
                 packages,
                 workspace,
             } => {
                 workspace::add(&packages, workspace.as_deref())?;
+            }
+            WorkspaceCommands::Remove {
+                packages,
+                workspace,
+                force,
+            } => {
+                workspace::remove_packages(&packages, workspace.as_deref(), force)?;
             }
             WorkspaceCommands::Sync { workspace } => {
                 workspace::sync(workspace.as_deref())?;

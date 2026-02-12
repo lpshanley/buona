@@ -1,8 +1,8 @@
-//! Workspace management — creating, listing, removing workspaces and adding packages.
+//! Workspace management — creating, listing, deleting workspaces and adding/removing packages.
 
 mod git;
 mod ops;
 mod types;
 mod vscode;
 
-pub(crate) use ops::{add, create, list, open, remove, sync};
+pub(crate) use ops::{add, create, delete, list, open, remove_packages, sync};

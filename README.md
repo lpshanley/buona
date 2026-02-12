@@ -2,11 +2,12 @@
 
 **The Good CLI** — making life easier when managing complex workspace and build tasks.
 
-*Buona* (Italian for "good") is a lightweight command-line tool for organizing and managing workspaces. It gives you a single, consistent interface for creating, listing, and removing project workspaces so you can focus on building rather than bookkeeping.
+*Buona* (Italian for "good") is a lightweight command-line tool for organizing and managing workspaces. It gives you a single, consistent interface for creating, listing, and deleting project workspaces — and for adding and removing packages within them — so you can focus on building rather than bookkeeping.
 
 ## Features
 
-- **Workspace management** — Create, list, remove workspaces, and add packages to them.
+- **Workspace management** — Create, list, and delete workspaces.
+- **Package management** — Add and remove packages (git repositories) within workspaces.
 - **Global configuration** — A simple config file (`~/.config/buona/config.json`) keeps your preferences consistent across projects.
 - **Interactive setup** — A guided wizard walks you through first-time configuration.
 - **Minimal & fast** — Built in Rust with a small dependency footprint.
@@ -87,10 +88,28 @@ You can also target a workspace by name instead of being inside it:
 buona ws add -p my-library --workspace my-project
 ```
 
-### 5. Remove a workspace
+### 5. Remove packages from a workspace
 
 ```sh
-buona workspace remove my-project
+# Remove a single package
+buona ws remove -p toolkit
+
+# Remove multiple packages at once
+buona ws remove -p toolkit -p utils
+
+# Target a specific workspace
+buona ws remove -p toolkit --workspace my-project
+
+# Skip the confirmation prompt
+buona ws remove -p toolkit --force
+```
+
+This removes the package directory from `src/` and updates `buona.workspace.json`.
+
+### 6. Delete a workspace
+
+```sh
+buona workspace delete my-project
 ```
 
 Add `--force` to skip the confirmation prompt.
@@ -123,9 +142,28 @@ buona workspace <COMMAND>
 Commands:
   list    List all workspaces in the configured directory
   create  Create a new workspace
-  remove  Remove a workspace
+  delete  Delete a workspace
   add     Add packages to a workspace
+  remove  Remove packages from a workspace
+  sync    Sync workspace metadata to a .code-workspace file
+  open    Open workspace in the configured editor
 ```
+
+#### `buona workspace create`
+
+```
+buona workspace create <PATH> [--name <NAME>]
+```
+
+Creates a new workspace directory with a `buona.workspace.json` metadata file.
+
+#### `buona workspace delete`
+
+```
+buona workspace delete <WORKSPACE> [--force]
+```
+
+Deletes a workspace and all of its contents. Prompts for confirmation unless `--force` is passed.
 
 #### `buona workspace add`
 
@@ -142,6 +180,14 @@ The `-p` flag accepts three package specifier formats:
 | Full URL | `git@github.com:acme/toolkit.git` | Used directly |
 
 Pass `-p` multiple times to add several packages in one command. Packages are cloned into the workspace's `src/` directory.
+
+#### `buona workspace remove`
+
+```
+buona workspace remove -p <PACKAGE>... [--workspace <NAME>] [--force]
+```
+
+Removes one or more packages from a workspace. This deletes the package directory from `src/` and removes the entry from `buona.workspace.json`. Prompts for confirmation unless `--force` is passed.
 
 ## Configuration
 
