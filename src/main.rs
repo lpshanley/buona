@@ -96,11 +96,19 @@ enum WorkspaceCommands {
         force: bool,
     },
 
-    /// Sync workspace metadata to a .code-workspace file
+    /// Pull latest changes for all packages and sync the workspace file
     Sync {
+        /// Package name(s) to sync (defaults to all packages)
+        #[arg(short = 'p', long = "package")]
+        packages: Vec<String>,
+
         /// Workspace name or directory (defaults to detecting from the current directory)
         #[arg(short, long)]
         workspace: Option<String>,
+
+        /// Only fetch (don't merge) — equivalent to git fetch instead of git pull
+        #[arg(short, long)]
+        fetch: bool,
     },
 
     /// Open workspace in the configured editor
@@ -151,8 +159,12 @@ fn main() -> anyhow::Result<()> {
             } => {
                 workspace::remove_packages(&packages, workspace.as_deref(), force)?;
             }
-            WorkspaceCommands::Sync { workspace } => {
-                workspace::sync(workspace.as_deref())?;
+            WorkspaceCommands::Sync {
+                packages,
+                workspace,
+                fetch,
+            } => {
+                workspace::sync(&packages, workspace.as_deref(), fetch)?;
             }
             WorkspaceCommands::Open { workspace } => {
                 workspace::open(workspace.as_deref())?;

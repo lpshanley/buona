@@ -8,6 +8,9 @@
 
 - **Workspace management** — Create, list, and delete workspaces.
 - **Package management** — Add and remove packages (git repositories) within workspaces.
+- **Automatic workspace file sync** — The `.code-workspace` file is automatically regenerated whenever packages are added, removed, or a workspace is created — no manual sync step needed.
+- **Sync & pull** — Pull the latest changes for every package in a workspace with a single command.
+- **Editor integration** — Open a workspace directly in VS Code or Cursor.
 - **Global configuration** — A simple config file (`~/.config/buona/config.json`) keeps your preferences consistent across projects.
 - **Interactive setup** — A guided wizard walks you through first-time configuration.
 - **Minimal & fast** — Built in Rust with a small dependency footprint.
@@ -80,7 +83,7 @@ buona ws add -p git@github.com:acme/toolkit.git
 buona ws add -p my-library -p acme/toolkit -p git@github.com:other/repo.git
 ```
 
-Packages are cloned into the workspace's `src/` directory and tracked in `buona.workspace.json`.
+Packages are cloned into the workspace's `src/` directory and tracked in `buona.workspace.json`. The `.code-workspace` file is automatically updated.
 
 You can also target a workspace by name instead of being inside it:
 
@@ -104,9 +107,42 @@ buona ws remove -p toolkit --workspace my-project
 buona ws remove -p toolkit --force
 ```
 
-This removes the package directory from `src/` and updates `buona.workspace.json`.
+This removes the package directory from `src/` and updates `buona.workspace.json`. The `.code-workspace` file is automatically updated.
 
-### 6. Delete a workspace
+### 6. Sync packages
+
+Pull the latest changes for every package in the workspace and regenerate the `.code-workspace` file:
+
+```sh
+buona ws sync
+
+# Or target a specific workspace
+buona ws sync --workspace my-project
+
+# Sync only specific packages
+buona ws sync -p toolkit -p utils
+
+# Fetch only (no merge) — useful for reviewing changes before merging
+buona ws sync --fetch
+
+# Combine: fetch specific packages only
+buona ws sync -p toolkit --fetch
+```
+
+This runs `git pull` (or `git fetch` with `--fetch`) in each package directory under `src/` and reports results. When `-p` is omitted, all tracked packages are synced.
+
+### 7. Open a workspace in your editor
+
+```sh
+buona ws open
+
+# Or target a specific workspace
+buona ws open --workspace my-project
+```
+
+This regenerates the `.code-workspace` file and opens it in your configured editor (VS Code or Cursor).
+
+### 8. Delete a workspace
 
 ```sh
 buona workspace delete my-project
@@ -145,7 +181,7 @@ Commands:
   delete  Delete a workspace
   add     Add packages to a workspace
   remove  Remove packages from a workspace
-  sync    Sync workspace metadata to a .code-workspace file
+  sync    Pull latest changes for all packages and sync the workspace file
   open    Open workspace in the configured editor
 ```
 
@@ -187,7 +223,23 @@ Pass `-p` multiple times to add several packages in one command. Packages are cl
 buona workspace remove -p <PACKAGE>... [--workspace <NAME>] [--force]
 ```
 
-Removes one or more packages from a workspace. This deletes the package directory from `src/` and removes the entry from `buona.workspace.json`. Prompts for confirmation unless `--force` is passed.
+Removes one or more packages from a workspace. This deletes the package directory from `src/` and removes the entry from `buona.workspace.json`. The `.code-workspace` file is automatically updated. Prompts for confirmation unless `--force` is passed.
+
+#### `buona workspace sync`
+
+```
+buona workspace sync [-p <PACKAGE>...] [--workspace <NAME>] [--fetch]
+```
+
+Runs `git pull` in tracked package directories and regenerates the `.code-workspace` file. Reports per-package success or failure. Pass `-p` one or more times to target specific packages (defaults to all). Pass `--fetch` to run `git fetch` instead of `git pull` (useful for reviewing incoming changes before merging).
+
+#### `buona workspace open`
+
+```
+buona workspace open [--workspace <NAME>]
+```
+
+Regenerates the `.code-workspace` file and opens it in your configured editor (VS Code or Cursor).
 
 ## Configuration
 

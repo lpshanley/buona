@@ -188,6 +188,9 @@ pub(crate) fn create(path: &Path, name: Option<&str>) -> Result<()> {
     };
     write_meta(&target, &meta)?;
 
+    // Auto-sync the .code-workspace file
+    sync_workspace_file(&target, &meta)?;
+
     println!();
     println!(
         "  {} Created workspace {}",
@@ -330,6 +333,9 @@ pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
     if !successes.is_empty() {
         meta.packages.extend(successes.iter().cloned());
         write_meta(&ws_root, &meta)?;
+
+        // Auto-sync the .code-workspace file
+        sync_workspace_file(&ws_root, &meta)?;
     }
 
     // Print summary
@@ -488,6 +494,9 @@ pub(crate) fn remove_packages(packages: &[String], workspace: Option<&str>, forc
     // Save updated metadata
     if !removed.is_empty() {
         write_meta(&ws_root, &meta)?;
+
+        // Auto-sync the .code-workspace file
+        sync_workspace_file(&ws_root, &meta)?;
     }
 
     // Print summary
@@ -524,26 +533,12 @@ pub(crate) fn remove_packages(packages: &[String], workspace: Option<&str>, forc
     Ok(())
 }
 
-/// Sync workspace metadata to a `.code-workspace` file.
+/// Generate a `.code-workspace` file from the given workspace root and metadata.
 ///
-/// Reads the `buona.workspace.json`, builds a VS Code multi-root workspace
-/// file with one folder entry per tracked package, and writes it next to the
-/// metadata file. Returns the path to the generated `.code-workspace` file.
-///
-/// If `workspace` is provided, it is looked up by name or directory.
-/// Otherwise, the workspace is detected from the current working directory.
-pub(crate) fn sync(workspace: Option<&str>) -> Result<PathBuf> {
-    let s = Styles::default();
-
-    // Resolve the workspace root
-    let ws_root = match workspace {
-        Some(name) => find_workspace(name)?,
-        None => find_workspace_from_cwd()?,
-    };
-
-    let meta = read_meta(&ws_root)?
-        .context("could not read workspace metadata — is this a valid buona workspace?")?;
-
+/// This is the core sync logic shared by `sync()` and other operations that
+/// modify metadata (`create`, `add`, `remove`). Returns the path to the
+/// generated file.
+fn sync_workspace_file(ws_root: &Path, meta: &WorkspaceMeta) -> Result<PathBuf> {
     let sanitized = sanitize_name(&meta.name);
     if sanitized.is_empty() {
         bail!(
@@ -574,16 +569,133 @@ pub(crate) fn sync(workspace: Option<&str>) -> Result<PathBuf> {
     fs::write(&ws_file_path, json + "\n")
         .with_context(|| format!("could not write workspace file: {}", ws_file_path.display()))?;
 
+    Ok(ws_file_path)
+}
+
+/// Pull (or fetch) the latest changes for tracked packages and re-sync the
+/// `.code-workspace` file.
+///
+/// When `packages` is empty, all tracked packages are synced. Otherwise, only
+/// the named packages are synced. Runs `git pull` (or `git fetch` when
+/// `fetch_only` is true) in each package directory, reports results, and
+/// regenerates the workspace file. Returns the path to the generated
+/// `.code-workspace` file.
+///
+/// If `workspace` is provided, it is looked up by name or directory.
+/// Otherwise, the workspace is detected from the current working directory.
+pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: bool) -> Result<PathBuf> {
+    let s = Styles::default();
+
+    // Resolve the workspace root
+    let ws_root = match workspace {
+        Some(name) => find_workspace(name)?,
+        None => find_workspace_from_cwd()?,
+    };
+
+    let meta = read_meta(&ws_root)?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+
+    let src_dir = ws_root.join("src");
+
+    // Determine which packages to sync
+    let targets: Vec<&PackageEntry> = if packages.is_empty() {
+        meta.packages.iter().collect()
+    } else {
+        let mut matched: Vec<&PackageEntry> = Vec::new();
+        for name in packages {
+            match meta.packages.iter().find(|p| p.name == *name) {
+                Some(pkg) => matched.push(pkg),
+                None => bail!("package \"{name}\" not found in workspace {}", meta.name),
+            }
+        }
+        matched
+    };
+
     println!();
     println!(
-        "  {} Synced workspace file {}",
-        s.green.apply_to("✔"),
-        s.bold.apply_to(&filename)
+        "  {} Syncing {}",
+        s.bold.apply_to("🔄"),
+        s.bold.apply_to(&meta.name)
     );
+    println!("  {}", s.dim.apply_to("───────────────────────────"));
+
+    if targets.is_empty() {
+        println!("  {}  No packages to sync", s.dim.apply_to("—"));
+    }
+
+    let mut pulled: Vec<String> = Vec::new();
+    let mut failures: Vec<(String, String)> = Vec::new();
+
+    for pkg in &targets {
+        let pkg_dir = src_dir.join(&pkg.name);
+
+        if !pkg_dir.exists() {
+            let msg = format!("directory not found: {}", pkg_dir.display());
+            failures.push((pkg.name.clone(), msg.clone()));
+            println!("  {} {} — {}", s.red.apply_to("✘"), pkg.name, msg);
+            continue;
+        }
+
+        let git_op = if fetch_only { "Fetching" } else { "Pulling" };
+        println!(
+            "  {} {} {} ...",
+            s.dim.apply_to("→"),
+            git_op,
+            s.cyan.apply_to(&pkg.name)
+        );
+
+        let git_arg = if fetch_only { "fetch" } else { "pull" };
+        let output = Command::new("git")
+            .arg(git_arg)
+            .current_dir(&pkg_dir)
+            .output()
+            .with_context(|| format!("failed to execute git {git_arg} — is git installed?"))?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let fallback = if fetch_only { "done" } else { "up to date" };
+            let summary = stdout.lines().next().unwrap_or(fallback).trim();
+            let summary = if summary.is_empty() { fallback } else { summary };
+            println!(
+                "  {} {} — {}",
+                s.green.apply_to("✔"),
+                s.bold.apply_to(&pkg.name),
+                s.dim.apply_to(summary)
+            );
+            pulled.push(pkg.name.clone());
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let msg = stderr.trim().to_string();
+            failures.push((pkg.name.clone(), msg.clone()));
+            println!("  {} {} — {}", s.red.apply_to("✘"), pkg.name, msg);
+        }
+    }
+
+    // Re-sync the .code-workspace file
+    let ws_file_path = sync_workspace_file(&ws_root, &meta)?;
+
+    // Print summary
+    let verb = if fetch_only { "fetched" } else { "pulled" };
+    println!();
+    if !failures.is_empty() {
+        println!("  {} {verb}, {} failed", pulled.len(), failures.len());
+    } else if !targets.is_empty() {
+        println!(
+            "  {} {} package{} synced",
+            s.green.apply_to("✔"),
+            pulled.len(),
+            if pulled.len() == 1 { "" } else { "s" }
+        );
+    }
+
+    let filename = ws_file_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
     println!(
-        "  {}  {}",
-        s.dim.apply_to("Location:"),
-        ws_file_path.display()
+        "  {} Workspace file {}",
+        s.green.apply_to("✔"),
+        s.bold.apply_to(filename.as_ref())
     );
     println!();
 
@@ -592,7 +704,7 @@ pub(crate) fn sync(workspace: Option<&str>) -> Result<PathBuf> {
 
 /// Open a workspace in the configured editor.
 ///
-/// Syncs the `.code-workspace` file first, then launches the editor.
+/// Regenerates the `.code-workspace` file and then launches the editor.
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
@@ -600,7 +712,16 @@ pub(crate) fn open(workspace: Option<&str>) -> Result<()> {
     let s = Styles::default();
     let cfg = config::load_config()?;
 
-    let ws_file_path = sync(workspace)?;
+    // Resolve the workspace root and regenerate the .code-workspace file
+    let ws_root = match workspace {
+        Some(name) => find_workspace(name)?,
+        None => find_workspace_from_cwd()?,
+    };
+
+    let meta = read_meta(&ws_root)?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+
+    let ws_file_path = sync_workspace_file(&ws_root, &meta)?;
 
     let ide_cmd = cfg.ide.command();
 
