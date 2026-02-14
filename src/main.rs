@@ -1,6 +1,7 @@
 //! CLI entry point for the buona workspace manager.
 
 mod config;
+mod run;
 mod styles;
 mod workspace;
 
@@ -29,6 +30,25 @@ enum Commands {
     Workspace {
         #[command(subcommand)]
         command: WorkspaceCommands,
+    },
+
+    /// Run a command within the current package's build system
+    Run {
+        /// Force a specific build system (overrides auto-detection)
+        #[arg(long)]
+        system: Option<String>,
+
+        /// Show the resolved command but don't execute it
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Print detailed resolution information
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// The command and arguments to run (everything after --)
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
     },
 }
 
@@ -218,6 +238,26 @@ fn main() -> anyhow::Result<()> {
                 workspace::adopt(Path::new(&path), workspace.as_deref(), copy, name.as_deref())?;
             }
         },
+        Commands::Run {
+            system,
+            dry_run,
+            verbose,
+            command,
+        } => {
+            let options = run::RunOptions {
+                system,
+                dry_run,
+                verbose,
+                command,
+            };
+            if let Err(e) = run::execute(options) {
+                if let Some(run_err) = e.downcast_ref::<run::RunError>() {
+                    run_err.exit();
+                }
+                eprintln!("error: {e:?}");
+                std::process::exit(1);
+            }
+        }
     }
 
     Ok(())

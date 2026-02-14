@@ -50,7 +50,7 @@ fn find_workspace(query: &str) -> Result<PathBuf> {
 
 /// Walk up from the given directory looking for a `buona.workspace.json` file.
 /// Returns the directory containing the workspace file.
-fn find_workspace_root(start: &Path) -> Result<PathBuf> {
+pub(crate) fn find_workspace_root(start: &Path) -> Result<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
         if dir.join(WORKSPACE_FILE).exists() {

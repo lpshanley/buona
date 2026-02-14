@@ -1,0 +1,174 @@
+//! Core data types for the `buona run` command.
+
+use std::fmt;
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+/// Known build systems that buona can drive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum BuildSystem {
+    Cargo,
+    Go,
+    Npm,
+    Pnpm,
+    Yarn,
+    Bun,
+    Uv,
+    Poetry,
+    Make,
+    Gradle,
+    Maven,
+}
+
+#[cfg(test)]
+impl BuildSystem {
+    const ALL: &[BuildSystem] = &[
+        BuildSystem::Cargo,
+        BuildSystem::Go,
+        BuildSystem::Npm,
+        BuildSystem::Pnpm,
+        BuildSystem::Yarn,
+        BuildSystem::Bun,
+        BuildSystem::Uv,
+        BuildSystem::Poetry,
+        BuildSystem::Make,
+        BuildSystem::Gradle,
+        BuildSystem::Maven,
+    ];
+}
+
+impl fmt::Display for BuildSystem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BuildSystem::Cargo => write!(f, "cargo"),
+            BuildSystem::Go => write!(f, "go"),
+            BuildSystem::Npm => write!(f, "npm"),
+            BuildSystem::Pnpm => write!(f, "pnpm"),
+            BuildSystem::Yarn => write!(f, "yarn"),
+            BuildSystem::Bun => write!(f, "bun"),
+            BuildSystem::Uv => write!(f, "uv"),
+            BuildSystem::Poetry => write!(f, "poetry"),
+            BuildSystem::Make => write!(f, "make"),
+            BuildSystem::Gradle => write!(f, "gradle"),
+            BuildSystem::Maven => write!(f, "maven"),
+        }
+    }
+}
+
+/// Standard commands that buona recognizes and maps to system-specific invocations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum StandardCommand {
+    Install,
+    Build,
+    Run,
+    Test,
+    Lint,
+    Fmt,
+    Clean,
+    Publish,
+    Bench,
+    Doc,
+    Dev,
+}
+
+impl StandardCommand {
+    /// Try to parse a string into a standard command.
+    pub(crate) fn parse(s: &str) -> Option<Self> {
+        match s {
+            "install" => Some(Self::Install),
+            "build" => Some(Self::Build),
+            "run" => Some(Self::Run),
+            "test" => Some(Self::Test),
+            "lint" => Some(Self::Lint),
+            "fmt" | "format" => Some(Self::Fmt),
+            "clean" => Some(Self::Clean),
+            "publish" => Some(Self::Publish),
+            "bench" => Some(Self::Bench),
+            "doc" | "docs" => Some(Self::Doc),
+            "dev" => Some(Self::Dev),
+            _ => None,
+        }
+    }
+}
+
+/// Describes how the execution plan was derived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanKind {
+    /// A standard command with a known system mapping (e.g., "test" → "cargo test").
+    Standard,
+    /// An unrecognized command proxied through the build system (e.g., "my-script" → "npm run my-script").
+    Proxy,
+    /// An explicit exec override from buona.json (e.g., "test" → ["pnpm", "run", "custom-test"]).
+    ExecOverride,
+}
+
+/// The fully resolved execution plan. Contains everything needed to spawn the process.
+#[derive(Debug, Clone)]
+pub(crate) struct ExecutionPlan {
+    /// Working directory for the command.
+    pub(crate) cwd: PathBuf,
+    /// The resolved build system.
+    pub(crate) system: BuildSystem,
+    /// How this plan was derived.
+    pub(crate) kind: PlanKind,
+    /// The program to execute (e.g., "cargo", "npm").
+    pub(crate) program: String,
+    /// Arguments to pass to the program.
+    pub(crate) args: Vec<String>,
+    /// Human-readable display string for output (e.g., "cargo test -- --nocapture").
+    pub(crate) display: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_system_display() {
+        assert_eq!(BuildSystem::Cargo.to_string(), "cargo");
+        assert_eq!(BuildSystem::Npm.to_string(), "npm");
+        assert_eq!(BuildSystem::Gradle.to_string(), "gradle");
+        assert_eq!(BuildSystem::Maven.to_string(), "maven");
+    }
+
+    #[test]
+    fn build_system_serde_round_trips() {
+        for &system in BuildSystem::ALL {
+            let json = serde_json::to_string(&system).unwrap();
+            let deserialized: BuildSystem = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, system);
+        }
+    }
+
+    #[test]
+    fn build_system_serializes_to_lowercase() {
+        assert_eq!(serde_json::to_string(&BuildSystem::Cargo).unwrap(), "\"cargo\"");
+        assert_eq!(serde_json::to_string(&BuildSystem::Gradle).unwrap(), "\"gradle\"");
+    }
+
+    #[test]
+    fn standard_command_parse_known() {
+        assert_eq!(StandardCommand::parse("install"), Some(StandardCommand::Install));
+        assert_eq!(StandardCommand::parse("build"), Some(StandardCommand::Build));
+        assert_eq!(StandardCommand::parse("run"), Some(StandardCommand::Run));
+        assert_eq!(StandardCommand::parse("test"), Some(StandardCommand::Test));
+        assert_eq!(StandardCommand::parse("lint"), Some(StandardCommand::Lint));
+        assert_eq!(StandardCommand::parse("fmt"), Some(StandardCommand::Fmt));
+        assert_eq!(StandardCommand::parse("format"), Some(StandardCommand::Fmt));
+        assert_eq!(StandardCommand::parse("clean"), Some(StandardCommand::Clean));
+        assert_eq!(StandardCommand::parse("publish"), Some(StandardCommand::Publish));
+        assert_eq!(StandardCommand::parse("bench"), Some(StandardCommand::Bench));
+        assert_eq!(StandardCommand::parse("doc"), Some(StandardCommand::Doc));
+        assert_eq!(StandardCommand::parse("docs"), Some(StandardCommand::Doc));
+        assert_eq!(StandardCommand::parse("dev"), Some(StandardCommand::Dev));
+    }
+
+    #[test]
+    fn standard_command_parse_unknown() {
+        assert_eq!(StandardCommand::parse("my-script"), None);
+        assert_eq!(StandardCommand::parse("custom"), None);
+        assert_eq!(StandardCommand::parse(""), None);
+    }
+}
