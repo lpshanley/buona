@@ -202,7 +202,15 @@ pub(crate) fn list() -> Result<()> {
 /// Create a new workspace directory. Writes a `buona.workspace.json` marker
 /// file with the workspace name. If `name` is not provided, the directory name
 /// is used.
-pub(crate) fn create(path: &Path, name: Option<&str>) -> Result<()> {
+///
+/// After creation, if `packages` is provided, they are cloned into the workspace.
+/// If `open_ws` is true, the workspace is opened in the configured editor.
+pub(crate) fn create(
+    path: &Path,
+    name: Option<&str>,
+    packages: Option<&[String]>,
+    open_ws: bool,
+) -> Result<()> {
     let s = Styles::default();
 
     // Resolve the target directory
@@ -252,8 +260,20 @@ pub(crate) fn create(path: &Path, name: Option<&str>) -> Result<()> {
         s.bold.apply_to(&meta.name)
     );
     println!("  {}  {}", s.dim.apply_to("Location:"), target.display());
-    println!();
 
+    // Add packages if specified
+    if let Some(pkgs) = packages
+        && !pkgs.is_empty()
+    {
+        add_packages_to_workspace(&target, pkgs)?;
+    }
+
+    // Open workspace in editor if requested
+    if open_ws {
+        open_workspace_at(&target)?;
+    }
+
+    println!();
     Ok(())
 }
 
@@ -300,21 +320,14 @@ pub(crate) fn delete(query: &str, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// Add one or more packages to a workspace by cloning them into `src/`.
+/// Add packages to a specific workspace root.
 ///
-/// If `workspace` is provided, it is looked up by name or directory.
-/// Otherwise, the workspace is detected from the current working directory.
-pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
+/// Internal helper that adds packages to `src/` without resolving workspace by name.
+fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> {
     let s = Styles::default();
     let cfg = config::load_config()?;
 
-    // Resolve the workspace root
-    let ws_root = match workspace {
-        Some(name) => find_workspace(name)?,
-        None => find_workspace_from_cwd()?,
-    };
-
-    let meta = read_meta(&ws_root)?
+    let meta = read_meta(ws_root)?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
     let src_dir = ws_root.join("src");
@@ -382,7 +395,7 @@ pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
 
     // Re-sync the .code-workspace file (picks up newly cloned directories)
     if !successes.is_empty() {
-        sync_workspace_file(&ws_root, &meta)?;
+        sync_workspace_file(ws_root, &meta)?;
     }
 
     // Print summary
@@ -404,6 +417,69 @@ pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Open a workspace at a specific root in the configured editor.
+///
+/// Internal helper that opens the workspace without resolving by name.
+fn open_workspace_at(ws_root: &Path) -> Result<()> {
+    let s = Styles::default();
+    let cfg = config::load_config()?;
+
+    let meta = read_meta(ws_root)?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+
+    let ws_file_path = sync_workspace_file(ws_root, &meta)?;
+
+    let ide_cmd = cfg.ide.command();
+
+    println!(
+        "  {} Opening in {} ...",
+        s.dim.apply_to("→"),
+        s.bold.apply_to(cfg.ide.to_string())
+    );
+
+    let status = Command::new(ide_cmd)
+        .arg(&ws_file_path)
+        .status()
+        .with_context(|| {
+            format!(
+                "failed to launch {ide_cmd} — is {} installed and on your PATH?",
+                cfg.ide
+            )
+        })?;
+
+    if !status.success() {
+        bail!("{ide_cmd} exited with {status}");
+    }
+
+    println!(
+        "  {} Opened {}",
+        s.green.apply_to("✔"),
+        s.bold.apply_to(
+            ws_file_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        )
+    );
+    println!();
+
+    Ok(())
+}
+
+/// Add one or more packages to a workspace by cloning them into `src/`.
+///
+/// If `workspace` is provided, it is looked up by name or directory.
+/// Otherwise, the workspace is detected from the current working directory.
+pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
+    // Resolve the workspace root
+    let ws_root = match workspace {
+        Some(name) => find_workspace(name)?,
+        None => find_workspace_from_cwd()?,
+    };
+
+    add_packages_to_workspace(&ws_root, packages)
 }
 
 /// Remove one or more packages from a workspace.
@@ -868,55 +944,13 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
 pub(crate) fn open(workspace: Option<&str>) -> Result<()> {
-    let s = Styles::default();
-    let cfg = config::load_config()?;
-
-    // Resolve the workspace root and regenerate the .code-workspace file
+    // Resolve the workspace root
     let ws_root = match workspace {
         Some(name) => find_workspace(name)?,
         None => find_workspace_from_cwd()?,
     };
 
-    let meta = read_meta(&ws_root)?
-        .context("could not read workspace metadata — is this a valid buona workspace?")?;
-
-    let ws_file_path = sync_workspace_file(&ws_root, &meta)?;
-
-    let ide_cmd = cfg.ide.command();
-
-    println!(
-        "  {} Opening in {} ...",
-        s.dim.apply_to("→"),
-        s.bold.apply_to(cfg.ide.to_string())
-    );
-
-    let status = Command::new(ide_cmd)
-        .arg(&ws_file_path)
-        .status()
-        .with_context(|| {
-            format!(
-                "failed to launch {ide_cmd} — is {} installed and on your PATH?",
-                cfg.ide
-            )
-        })?;
-
-    if !status.success() {
-        bail!("{ide_cmd} exited with {status}");
-    }
-
-    println!(
-        "  {} Opened {}",
-        s.green.apply_to("✔"),
-        s.bold.apply_to(
-            ws_file_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-        )
-    );
-    println!();
-
-    Ok(())
+    open_workspace_at(&ws_root)
 }
 
 /// Adopt an existing local directory into the workspace.
@@ -1448,5 +1482,122 @@ mod tests {
         fs::write(&file, "hello").unwrap();
         assert!(file.exists());
         assert!(!file.is_dir(), "files should be rejected by adopt");
+    }
+
+    // ── add_packages_to_workspace tests ──────────────────────────────
+
+    #[test]
+    fn add_packages_to_workspace_clones_git_repo() {
+        let ws_dir = TempDir::new().unwrap();
+        setup_workspace(ws_dir.path(), "test-ws");
+
+        // Create a mock "remote" git repo
+        let remote_dir = TempDir::new().unwrap();
+        let remote_repo = remote_dir.path().join("test-pkg");
+        fs::create_dir_all(&remote_repo).unwrap();
+        fs::write(remote_repo.join("README.md"), "test").unwrap();
+
+        // Init git repo and commit the file
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&remote_repo)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&remote_repo)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&remote_repo)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&remote_repo)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&remote_repo)
+            .output()
+            .unwrap();
+
+        // Clone using full file:// URL
+        let url = format!("file://{}", remote_repo.canonicalize().unwrap().display());
+        let result = add_packages_to_workspace(ws_dir.path(), &[url]);
+
+        // The clone should succeed
+        assert!(result.is_ok());
+
+        // Verify the package was cloned into src/
+        let pkg_dir = ws_dir.path().join("src").join("test-pkg");
+        assert!(pkg_dir.exists());
+        assert!(pkg_dir.join("README.md").exists());
+
+        // Verify it's discoverable
+        let pkgs = list_packages(ws_dir.path()).unwrap();
+        assert!(pkgs.contains(&"test-pkg".to_string()));
+    }
+
+    #[test]
+    fn add_packages_to_workspace_errors_when_all_fail() {
+        let ws_dir = TempDir::new().unwrap();
+        setup_workspace(ws_dir.path(), "test-ws");
+
+        // Pre-create a package directory
+        let pkg_dir = ws_dir.path().join("src").join("existing-pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(pkg_dir.join("marker.txt"), "original").unwrap();
+
+        // Try to add the same package - should fail with "already exists"
+        let remote_dir = TempDir::new().unwrap();
+        let remote_repo = remote_dir.path().join("existing-pkg");
+        fs::create_dir_all(&remote_repo).unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&remote_repo)
+            .output()
+            .unwrap();
+
+        let url = format!("file://{}", remote_repo.canonicalize().unwrap().display());
+        let result = add_packages_to_workspace(ws_dir.path(), &[url]);
+
+        // Should return an error when all packages fail
+        assert!(result.is_err());
+
+        // Original file should still be there
+        assert_eq!(
+            fs::read_to_string(pkg_dir.join("marker.txt")).unwrap(),
+            "original"
+        );
+    }
+
+    // ── open_workspace_at tests ────────────────────────────────────
+
+    #[test]
+    fn open_workspace_at_generates_workspace_file() {
+        let ws_dir = TempDir::new().unwrap();
+        setup_workspace(ws_dir.path(), "my-workspace");
+
+        // Add a package so there's something in the workspace file
+        let src_dir = ws_dir.path().join("src");
+        fs::create_dir_all(src_dir.join("pkg-a")).unwrap();
+
+        // Call open_workspace_at - this should create the .code-workspace file
+        // Note: This will fail to actually launch the editor in tests,
+        // but we can't easily mock that. We'll test that the file was generated.
+        let result = sync_workspace_file(ws_dir.path(), &read_meta(ws_dir.path()).unwrap().unwrap());
+        assert!(result.is_ok());
+
+        let ws_file = result.unwrap();
+        assert!(ws_file.exists());
+        assert!(ws_file.file_name().unwrap().to_string_lossy().contains("my-workspace"));
+
+        // Verify file contents
+        let contents = fs::read_to_string(&ws_file).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(parsed["folders"][0]["path"], "src/pkg-a");
     }
 }

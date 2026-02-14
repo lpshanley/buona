@@ -58,6 +58,14 @@ enum WorkspaceCommands {
         /// Optional display name for the workspace (defaults to the directory name)
         #[arg(short, long)]
         name: Option<String>,
+
+        /// Package specifier(s) to add after creation: name, org/name, or a full git URL
+        #[arg(short = 'p', long = "package")]
+        packages: Option<Vec<String>>,
+
+        /// Open the workspace in the configured editor after creation
+        #[arg(long)]
+        open: bool,
     },
 
     /// Delete a workspace
@@ -169,8 +177,8 @@ fn main() -> anyhow::Result<()> {
             WorkspaceCommands::List => {
                 workspace::list()?;
             }
-            WorkspaceCommands::Create { path, name } => {
-                workspace::create(Path::new(&path), name.as_deref())?;
+            WorkspaceCommands::Create { path, name, packages, open } => {
+                workspace::create(Path::new(&path), name.as_deref(), packages.as_deref(), open)?;
             }
             WorkspaceCommands::Delete { workspace, force } => {
                 workspace::delete(&workspace, force)?;
