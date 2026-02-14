@@ -22,17 +22,20 @@ pub(crate) enum Ide {
     Vscode,
     /// Cursor
     Cursor,
+    /// Windsurf
+    Windsurf,
 }
 
 impl Ide {
     /// All variants in display order.
-    pub(crate) const ALL: [Ide; 2] = [Ide::Vscode, Ide::Cursor];
+    pub(crate) const ALL: [Ide; 3] = [Ide::Vscode, Ide::Cursor, Ide::Windsurf];
 
     /// Returns the CLI command name used to launch this editor.
     pub(crate) fn command(&self) -> &'static str {
         match self {
             Ide::Vscode => "code",
             Ide::Cursor => "cursor",
+            Ide::Windsurf => "windsurf",
         }
     }
 }
@@ -42,6 +45,7 @@ impl fmt::Display for Ide {
         match self {
             Ide::Vscode => write!(f, "VS Code"),
             Ide::Cursor => write!(f, "Cursor"),
+            Ide::Windsurf => write!(f, "Windsurf"),
         }
     }
 }
