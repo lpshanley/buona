@@ -6,6 +6,13 @@ use std::path::Path;
 use super::systems::{marker_files, refine_python_system};
 use super::types::BuildSystem;
 
+/// A detected build system with the marker file that triggered it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Detection {
+    pub(crate) system: BuildSystem,
+    pub(crate) marker: String,
+}
+
 /// Auto-detect the build system by scanning for marker files in the given directory.
 ///
 /// Returns `None` if no known marker file is found. Marker files are checked in
@@ -23,6 +30,32 @@ pub(super) fn detect_build_system(dir: &Path) -> Option<BuildSystem> {
         }
     }
     None
+}
+
+/// Scan for all matching marker files, returning every detection in priority order.
+///
+/// The first entry in the returned vec is the winner. Subsequent entries are
+/// lower-priority matches. Returns an empty vec if nothing is found.
+pub(crate) fn detect_all_systems(dir: &Path) -> Vec<Detection> {
+    let mut results = Vec::new();
+    for &(marker, system) in marker_files() {
+        if dir.join(marker).exists() {
+            let resolved = if marker == "pyproject.toml" {
+                if let Ok(content) = fs::read_to_string(dir.join(marker)) {
+                    refine_python_system(&content)
+                } else {
+                    system
+                }
+            } else {
+                system
+            };
+            results.push(Detection {
+                system: resolved,
+                marker: marker.to_string(),
+            });
+        }
+    }
+    results
 }
 
 #[cfg(test)]
@@ -160,5 +193,79 @@ mod tests {
         fs::write(dir.path().join("Makefile"), "all:").unwrap();
 
         assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Cargo));
+    }
+
+    // ── detect_all_systems tests ───────────────────────────────
+
+    #[test]
+    fn detect_all_empty_dir() {
+        let dir = TempDir::new().unwrap();
+        assert!(detect_all_systems(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn detect_all_single_system() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+
+        let results = detect_all_systems(dir.path());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].system, BuildSystem::Cargo);
+        assert_eq!(results[0].marker, "Cargo.toml");
+    }
+
+    #[test]
+    fn detect_all_cargo_and_makefile() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+        fs::write(dir.path().join("Makefile"), "all:").unwrap();
+
+        let results = detect_all_systems(dir.path());
+        assert_eq!(results.len(), 2);
+        // Cargo has higher priority
+        assert_eq!(results[0].system, BuildSystem::Cargo);
+        assert_eq!(results[1].system, BuildSystem::Make);
+    }
+
+    #[test]
+    fn detect_all_pnpm_also_finds_package_json() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), "{}").unwrap();
+        fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
+
+        let results = detect_all_systems(dir.path());
+        // Should find pnpm-lock.yaml (Pnpm) and package.json (Npm)
+        assert!(results.len() >= 2);
+        assert_eq!(results[0].system, BuildSystem::Pnpm);
+        // package.json also appears as a lower-priority Npm detection
+        assert!(results.iter().any(|d| d.system == BuildSystem::Npm));
+    }
+
+    #[test]
+    fn detect_all_preserves_priority_order() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("go.mod"), "module example").unwrap();
+        fs::write(dir.path().join("Makefile"), "all:").unwrap();
+
+        let results = detect_all_systems(dir.path());
+        assert_eq!(results.len(), 2);
+        // go.mod has higher priority than Makefile
+        assert_eq!(results[0].system, BuildSystem::Go);
+        assert_eq!(results[1].system, BuildSystem::Make);
+    }
+
+    #[test]
+    fn detect_all_refines_pyproject_to_poetry() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[tool.poetry]\nname = \"my-project\"\n",
+        )
+        .unwrap();
+
+        let results = detect_all_systems(dir.path());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].system, BuildSystem::Poetry);
+        assert_eq!(results[0].marker, "pyproject.toml");
     }
 }

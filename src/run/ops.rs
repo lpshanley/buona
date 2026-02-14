@@ -11,6 +11,7 @@ use crate::styles::Styles;
 use crate::workspace;
 
 use super::config::load_package_config;
+use super::detect::detect_all_systems;
 use super::error::RunError;
 use super::resolve::{ResolveInput, resolve_plan};
 use super::types::ExecutionPlan;
@@ -20,23 +21,18 @@ pub(crate) struct RunOptions {
     pub(crate) system: Option<String>,
     pub(crate) dry_run: bool,
     pub(crate) verbose: bool,
-    /// Everything after `--`: [command, args...]
-    pub(crate) command: Vec<String>,
+    /// The command to run (e.g. "build", "test", "lint").
+    pub(crate) command: String,
+    /// Additional arguments passed through to the underlying tool (after `--`).
+    pub(crate) args: Vec<String>,
 }
 
 /// Execute the run command.
 pub(crate) fn execute(options: RunOptions) -> Result<()> {
     let s = Styles::default();
 
-    // 1. Validate: must have at least one command token
-    if options.command.is_empty() {
-        anyhow::bail!(
-            "no command specified.\n  Usage: buona run [options] -- <command> [args...]"
-        );
-    }
-
-    let command_name = &options.command[0];
-    let extra_args = &options.command[1..];
+    let command_name = &options.command;
+    let extra_args = &options.args;
 
     // 2. Resolve workspace + package
     let cwd = env::current_dir().context("could not determine current directory")?;
@@ -84,6 +80,65 @@ pub(crate) fn execute(options: RunOptions) -> Result<()> {
     }
 
     execute_plan(&plan)
+}
+
+/// Print the auto-detected build system and all marker files found.
+pub(crate) fn detect() -> Result<()> {
+    let s = Styles::default();
+
+    let cwd = env::current_dir().context("could not determine current directory")?;
+    let ws_root = workspace::find_workspace_root(&cwd).map_err(|_| {
+        RunError::NotInWorkspace(
+            "not inside a buona workspace (no buona.workspace.json found)\n  \
+             Run this command from within a workspace."
+                .to_string(),
+        )
+    })?;
+
+    let pkg_dir = resolve_package_dir(&cwd, &ws_root)?;
+    let pkg_name = pkg_dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let detections = detect_all_systems(&pkg_dir);
+
+    println!();
+    if detections.is_empty() {
+        println!(
+            "  {} No build system detected in {}",
+            s.dim.apply_to("—"),
+            s.cyan.apply_to(&pkg_name),
+        );
+    } else {
+        let winner = &detections[0];
+        println!(
+            "  {} {} (via {})",
+            s.green.apply_to("detected:"),
+            s.bold.apply_to(winner.system.to_string()),
+            s.dim.apply_to(&winner.marker),
+        );
+
+        if detections.len() > 1 {
+            println!();
+            println!(
+                "  {}",
+                s.dim.apply_to("Other marker files found:")
+            );
+            for d in &detections[1..] {
+                println!(
+                    "  {}  {} (via {})",
+                    s.dim.apply_to("·"),
+                    d.system,
+                    s.dim.apply_to(&d.marker),
+                );
+            }
+        }
+    }
+    println!();
+
+    Ok(())
 }
 
 /// Determine the package root directory from the current working directory.

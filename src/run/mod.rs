@@ -9,4 +9,4 @@ mod systems;
 mod types;
 
 pub(crate) use error::RunError;
-pub(crate) use ops::{RunOptions, execute};
+pub(crate) use ops::{RunOptions, detect, execute};

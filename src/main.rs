@@ -32,6 +32,9 @@ enum Commands {
         command: WorkspaceCommands,
     },
 
+    /// Print the auto-detected build system for the current package
+    Detect,
+
     /// Run a command within the current package's build system
     Run {
         /// Force a specific build system (overrides auto-detection)
@@ -46,9 +49,12 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
 
-        /// The command and arguments to run (everything after --)
-        #[arg(last = true, required = true)]
-        command: Vec<String>,
+        /// The command to run (e.g. build, test, lint)
+        command: String,
+
+        /// Additional arguments passed through to the underlying tool (after --)
+        #[arg(last = true)]
+        args: Vec<String>,
     },
 }
 
@@ -238,17 +244,28 @@ fn main() -> anyhow::Result<()> {
                 workspace::adopt(Path::new(&path), workspace.as_deref(), copy, name.as_deref())?;
             }
         },
+        Commands::Detect => {
+            if let Err(e) = run::detect() {
+                if let Some(run_err) = e.downcast_ref::<run::RunError>() {
+                    run_err.exit();
+                }
+                eprintln!("error: {e:?}");
+                std::process::exit(1);
+            }
+        }
         Commands::Run {
             system,
             dry_run,
             verbose,
             command,
+            args,
         } => {
             let options = run::RunOptions {
                 system,
                 dry_run,
                 verbose,
                 command,
+                args,
             };
             if let Err(e) = run::execute(options) {
                 if let Some(run_err) = e.downcast_ref::<run::RunError>() {
