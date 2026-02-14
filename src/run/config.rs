@@ -47,10 +47,24 @@ pub(super) struct BuonaRunConfig {
     /// Per-command overrides.
     #[serde(default)]
     pub(super) commands: HashMap<String, CommandConfig>,
+
+    /// Directory to scan for convention-based hook scripts.
+    /// Relative paths are resolved from the package root.
+    #[serde(default = "default_hooks_dir", rename = "hooksDir")]
+    pub(super) hooks_dir: String,
+
+    /// Explicit hook definitions. Keys are `pre<command>` or `post<command>`.
+    /// Values are either a recognized system name or a literal shell command.
+    #[serde(default)]
+    pub(super) hooks: HashMap<String, String>,
 }
 
 fn default_system_str() -> String {
     "auto".to_string()
+}
+
+fn default_hooks_dir() -> String {
+    ".buona/hooks".to_string()
 }
 
 /// The filename for per-package configuration.
@@ -143,6 +157,64 @@ mod tests {
 
         let config = load_package_config(dir.path()).unwrap().unwrap();
         assert_eq!(config.system, "auto");
+    }
+
+    #[test]
+    fn load_defaults_hooks_dir() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join(PACKAGE_CONFIG_FILE), r#"{}"#).unwrap();
+
+        let config = load_package_config(dir.path()).unwrap().unwrap();
+        assert_eq!(config.hooks_dir, ".buona/hooks");
+        assert!(config.hooks.is_empty());
+    }
+
+    #[test]
+    fn load_config_with_hooks_dir() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join(PACKAGE_CONFIG_FILE),
+            r#"{ "hooksDir": ".custom/hooks" }"#,
+        )
+        .unwrap();
+
+        let config = load_package_config(dir.path()).unwrap().unwrap();
+        assert_eq!(config.hooks_dir, ".custom/hooks");
+    }
+
+    #[test]
+    fn load_config_with_hooks() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join(PACKAGE_CONFIG_FILE),
+            r#"{
+                "hooks": {
+                    "prebuild": "./scripts/gen.sh",
+                    "posttest": "docker compose down"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let config = load_package_config(dir.path()).unwrap().unwrap();
+        assert_eq!(config.hooks.len(), 2);
+        assert_eq!(config.hooks["prebuild"], "./scripts/gen.sh");
+        assert_eq!(config.hooks["posttest"], "docker compose down");
+    }
+
+    #[test]
+    fn existing_config_still_deserializes_with_new_fields() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join(PACKAGE_CONFIG_FILE),
+            r#"{ "system": "cargo", "commands": { "build": { "system": "make" } } }"#,
+        )
+        .unwrap();
+
+        let config = load_package_config(dir.path()).unwrap().unwrap();
+        assert_eq!(config.system, "cargo");
+        assert_eq!(config.hooks_dir, ".buona/hooks");
+        assert!(config.hooks.is_empty());
     }
 
     #[test]

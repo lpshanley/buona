@@ -9,6 +9,7 @@ pub(crate) struct Styles {
     pub(crate) cyan: Style,
     pub(crate) green: Style,
     pub(crate) red: Style,
+    pub(crate) yellow: Style,
 }
 
 impl Default for Styles {
@@ -19,6 +20,7 @@ impl Default for Styles {
             cyan: Style::new().cyan().bold(),
             green: Style::new().green().bold(),
             red: Style::new().red().bold(),
+            yellow: Style::new().yellow().bold(),
         }
     }
 }

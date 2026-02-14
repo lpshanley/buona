@@ -18,6 +18,14 @@ pub(crate) enum RunError {
     StandardNotMapped { command: String, system: String },
     /// buona.json is malformed or has conflicting settings (exit 68).
     ConfigError(String),
+    /// Ambiguous hook: multiple files in hooksDir match the same hook name (exit 69).
+    AmbiguousHook {
+        hook_name: String,
+        candidates: Vec<String>,
+    },
+    /// A hook process failed. Exit code is forwarded from the child process.
+    #[allow(dead_code)]
+    HookFailed { hook_name: String, exit_code: i32 },
 }
 
 impl RunError {
@@ -29,6 +37,8 @@ impl RunError {
             RunError::UnknownSystem(_) => 66,
             RunError::StandardNotMapped { .. } => 67,
             RunError::ConfigError(_) => 68,
+            RunError::AmbiguousHook { .. } => 69,
+            RunError::HookFailed { exit_code, .. } => *exit_code,
         }
     }
 
@@ -52,6 +62,22 @@ impl fmt::Display for RunError {
                 )
             }
             RunError::ConfigError(msg) => write!(f, "config error: {msg}"),
+            RunError::AmbiguousHook {
+                hook_name,
+                candidates,
+            } => {
+                write!(
+                    f,
+                    "ambiguous hook \"{hook_name}\": multiple files match in hooks directory: {}",
+                    candidates.join(", ")
+                )
+            }
+            RunError::HookFailed {
+                hook_name,
+                exit_code,
+            } => {
+                write!(f, "hook \"{hook_name}\" failed with exit code {exit_code}")
+            }
         }
     }
 }
@@ -100,5 +126,51 @@ mod tests {
     fn display_config_error() {
         let err = RunError::ConfigError("missing field".to_string());
         assert_eq!(err.to_string(), "config error: missing field");
+    }
+
+    #[test]
+    fn exit_code_ambiguous_hook() {
+        assert_eq!(
+            RunError::AmbiguousHook {
+                hook_name: String::new(),
+                candidates: vec![],
+            }
+            .exit_code(),
+            69
+        );
+    }
+
+    #[test]
+    fn exit_code_hook_failed_forwards_child_code() {
+        assert_eq!(
+            RunError::HookFailed {
+                hook_name: String::new(),
+                exit_code: 42,
+            }
+            .exit_code(),
+            42
+        );
+    }
+
+    #[test]
+    fn display_ambiguous_hook() {
+        let err = RunError::AmbiguousHook {
+            hook_name: "prebuild".to_string(),
+            candidates: vec!["prebuild.sh".to_string(), "prebuild.py".to_string()],
+        };
+        assert!(err.to_string().contains("ambiguous"));
+        assert!(err.to_string().contains("prebuild.sh, prebuild.py"));
+    }
+
+    #[test]
+    fn display_hook_failed() {
+        let err = RunError::HookFailed {
+            hook_name: "prebuild".to_string(),
+            exit_code: 1,
+        };
+        assert_eq!(
+            err.to_string(),
+            "hook \"prebuild\" failed with exit code 1"
+        );
     }
 }

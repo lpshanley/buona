@@ -317,6 +317,8 @@ mod tests {
         let config = BuonaRunConfig {
             system: "npm".to_string(),
             commands: HashMap::new(),
+            hooks_dir: ".buona/hooks".to_string(),
+            hooks: HashMap::new(),
         };
         let input = ResolveInput {
             package_dir: dir.path().to_path_buf(),
@@ -346,6 +348,8 @@ mod tests {
         let config = BuonaRunConfig {
             system: "auto".to_string(),
             commands,
+            hooks_dir: ".buona/hooks".to_string(),
+            hooks: HashMap::new(),
         };
         let input = ResolveInput {
             package_dir: dir.path().to_path_buf(),
@@ -380,6 +384,8 @@ mod tests {
         let config = BuonaRunConfig {
             system: "auto".to_string(),
             commands,
+            hooks_dir: ".buona/hooks".to_string(),
+            hooks: HashMap::new(),
         };
         let input = ResolveInput {
             package_dir: dir.path().to_path_buf(),
@@ -408,6 +414,8 @@ mod tests {
         let config = BuonaRunConfig {
             system: "auto".to_string(),
             commands,
+            hooks_dir: ".buona/hooks".to_string(),
+            hooks: HashMap::new(),
         };
         let input = ResolveInput {
             package_dir: dir.path().to_path_buf(),
@@ -440,6 +448,8 @@ mod tests {
         let config = BuonaRunConfig {
             system: "cargo".to_string(), // global says cargo
             commands,                     // but build says make
+            hooks_dir: ".buona/hooks".to_string(),
+            hooks: HashMap::new(),
         };
         let input = ResolveInput {
             package_dir: dir.path().to_path_buf(),
@@ -458,6 +468,8 @@ mod tests {
         let config = BuonaRunConfig {
             system: "npm".to_string(),
             commands: HashMap::new(),
+            hooks_dir: ".buona/hooks".to_string(),
+            hooks: HashMap::new(),
         };
         let input = ResolveInput {
             package_dir: dir.path().to_path_buf(),

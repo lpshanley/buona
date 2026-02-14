@@ -13,7 +13,10 @@
 - **Editor integration** — Open a workspace directly in VS Code or Cursor.
 - **Global configuration** — A simple config file (`~/.config/buona/config.json`) keeps your preferences consistent across projects.
 - **Interactive setup** — A guided wizard walks you through first-time configuration.
-- **Minimal & fast** — Built in Rust with a small dependency footprint.
+- **Build system detection** — Auto-detects Cargo, Go, npm, pnpm, yarn, Bun, uv, Poetry, Make, Gradle, and Maven projects.
+- **Universal build commands** — Run standardized commands (`build`, `test`, `lint`, etc.) across any project via `buona run`.
+- **Lifecycle hooks** — Configure `pre<command>` and `post<command>` hooks in `buona.json` or as executable scripts.
+- **Per-package configuration** — Fine-tune build system and commands via `buona.json`.
 
 ## Installation
 
@@ -156,21 +159,231 @@ buona ws open --workspace my-project
 
 This regenerates the `.code-workspace` file and opens it in your configured editor (VS Code or Cursor).
 
-### 9. Delete a workspace
+#### `buona workspace adopt`
 
-```sh
-buona workspace delete my-project
+```
+buona workspace adopt <PATH> [--workspace <NAME>] [--copy] [--name <PACKAGE_NAME>]
 ```
 
-Add `--force` to skip the confirmation prompt.
+Adopts an existing local directory into a workspace. By default, the directory is moved into the workspace's `src/` directory. Use `--copy` to copy instead of move. Use `--name` to override the package name (defaults to the directory name).
+
+```sh
+# Adopt a local project
+buona ws adopt ~/projects/my-library
+
+# Copy instead of move
+buona ws adopt ~/projects/my-library --copy
+
+# Override the package name
+buona ws adopt ~/projects/my-library --name custom-name
+```
+
+### 10. Detect build system
+
+```sh
+buona detect
+```
+
+Prints the auto-detected build system for the current package. This is useful for verifying buona correctly identifies your project type before running commands.
+
+### 11. Run build commands
+
+```sh
+buona run build
+```
+
+See the [Build System Commands](#build-system-commands) section for full details.
+
+## Build System Commands
+
+Buona provides universal build commands that work consistently across all your projects, regardless of their underlying build system.
+
+### Detect build system
+
+```sh
+buona detect
+```
+
+Prints the auto-detected build system for the current package, including all detected marker files. This helps you verify that buona correctly identifies your project type.
+
+Example output:
+```
+→ detected: cargo (via Cargo.toml)
+
+  Other marker files found:
+  ·  make (via Makefile)
+```
+
+### Run build commands
+
+```sh
+buona run <COMMAND> [ARGS...]
+```
+
+Executes a build command within the current package's build system. Buona automatically detects the build system and maps standard commands to the appropriate tool invocation.
+
+**Standard commands** (mapped across all build systems):
+| Command | Description |
+|---------|-------------|
+| `install` | Install dependencies |
+| `build` | Compile/build the project |
+| `run` | Run the application |
+| `test` | Run tests |
+| `lint` | Run linters |
+| `fmt` / `format` | Format code |
+| `clean` | Clean build artifacts |
+| `publish` | Publish package |
+| `bench` | Run benchmarks |
+| `doc` / `docs` | Generate documentation |
+| `dev` | Start development server |
+
+**Examples:**
+```sh
+# Build the current package
+buona run build
+
+# Run tests with extra arguments
+buona run test -- --nocapture
+
+# Run a non-standard command (proxied through the build system)
+buona run my-custom-script
+```
+
+**Options:**
+- `--system <SYSTEM>` — Force a specific build system (overrides auto-detection)
+- `--dry-run` — Show the resolved command without executing it
+- `--verbose` — Print detailed resolution information
+- `--` — Pass remaining arguments to the underlying tool
+
+**Supported build systems:**
+| System | Marker Files | Notes |
+|--------|--------------|-------|
+| `cargo` | `Cargo.toml` | Rust projects |
+| `go` | `go.mod` | Go modules |
+| `npm` | `package.json`, `package-lock.json` | Node.js (npm) |
+| `pnpm` | `pnpm-lock.yaml` | Node.js (pnpm) |
+| `yarn` | `yarn.lock` | Node.js (Yarn) |
+| `bun` | `bun.lock`, `bun.lockb` | Bun runtime |
+| `uv` | `pyproject.toml` | Python (non-Poetry) |
+| `poetry` | `pyproject.toml` | Python (Poetry projects) |
+| `make` | `Makefile` | Make-based projects |
+| `gradle` | `build.gradle`, `build.gradle.kts` | Prefers `gradlew` wrapper if present |
+| `maven` | `pom.xml` | Prefers `mvnw` wrapper if present |
+
+## Per-Package Configuration (`buona.json`)
+
+Create a `buona.json` file in a package root to customize build system behavior for that package.
+
+### Example `buona.json`
+
+```json
+{
+  "system": "cargo",
+  "commands": {
+    "build": { "system": "make" },
+    "test": { "exec": ["pnpm", "run", "custom-test"] }
+  },
+  "hooksDir": ".buona/hooks",
+  "hooks": {
+    "prebuild": "./scripts/generate.sh",
+    "posttest": "docker compose down"
+  }
+}
+```
+
+### Configuration fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `system` | string | Global build system for this package (`"auto"` or a system name) |
+| `commands` | object | Per-command overrides (see below) |
+| `hooksDir` | string | Directory to scan for convention-based hook scripts (default: `.buona/hooks`) |
+| `hooks` | object | Explicit hook definitions (keys: `pre<command>` or `post<command>`) |
+
+### Command overrides
+
+Each command in the `commands` object can have:
+
+- `system` — Override the build system for just this command
+- `exec` — Full exec override that replaces the entire command (array of strings)
+
+```json
+{
+  "commands": {
+    "build": { "system": "make" },
+    "test": { "exec": ["./run-tests.sh", "--ci"] }
+  }
+}
+```
+
+## Lifecycle Hooks
+
+Hooks are `pre<command>` and `post<command>` scripts that run before and after the main command. They are resolved from two sources in priority order:
+
+1. **Explicit `hooks` map in `buona.json`** (highest priority)
+2. **Convention-based files in `hooksDir`**
+
+### Explicit hooks in `buona.json`
+
+```json
+{
+  "hooks": {
+    "prebuild": "./scripts/generate-code.sh",
+    "posttest": "docker compose down",
+    "prelint": "cargo fmt --check"
+  }
+}
+```
+
+Hook values can be:
+- A **build system name** (e.g., `"cargo"`, `"npm"`) — buona will use that system's template for the command
+- A **shell command** — executed via `sh -c`
+
+### Convention-based hooks
+
+Place executable files in your `hooksDir` (default: `.buona/hooks/`):
+
+```
+my-package/
+├── .buona/
+│   └── hooks/
+│       ├── prebuild
+│       └── posttest
+├── Cargo.toml
+└── src/
+```
+
+Hook files must be **executable** to run. The filename (without extension) determines which hook it is. Multiple files with the same stem will cause an ambiguity error.
+
+### Hook execution order
+
+For `buona run build`:
+1. `prebuild` hook (if exists)
+2. Main build command
+3. `postbuild` hook (if exists)
+
+Hooks run in the package directory with the same working directory as the main command. If a hook fails, execution stops.
+
+### Viewing hooks
+
+Use `--verbose` to see which hooks are resolved:
+
+```sh
+buona run build --verbose
+```
+
+Use `--dry-run` to preview what would execute without running anything:
+
+```sh
+buona run build --dry-run
+```
 
 ## Usage
 
-```
-buona <COMMAND>
-
 Commands:
   config     View or set up the global configuration
+  detect     Print the auto-detected build system for the current package
+  run        Run a command within the current package's build system
   workspace  Manage workspaces (alias: ws)
 ```
 
@@ -194,6 +407,7 @@ Commands:
   create  Create a new workspace
   delete  Delete a workspace
   add     Add packages to a workspace
+  adopt   Adopt an existing local directory into the workspace
   remove  Remove packages from a workspace
   sync    Pull latest changes for all packages and sync the workspace file
   open    Open workspace in the configured editor

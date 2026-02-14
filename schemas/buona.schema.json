@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://buona.dev/schemas/buona.schema.json",
+  "title": "Buona Package Config",
+  "description": "Per-package configuration for buona run (buona.json).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "system": {
+      "type": "string",
+      "description": "Global build system for this package. Use \"auto\" for automatic detection or specify a system name.",
+      "default": "auto",
+      "anyOf": [
+        { "const": "auto" },
+        { "$ref": "#/$defs/buildSystem" }
+      ]
+    },
+    "commands": {
+      "type": "object",
+      "description": "Per-command overrides. Keys are command names (e.g. \"build\", \"test\").",
+      "additionalProperties": {
+        "$ref": "#/$defs/commandConfig"
+      }
+    },
+    "hooksDir": {
+      "type": "string",
+      "description": "Directory to scan for convention-based hook scripts. Relative paths are resolved from the package root.",
+      "default": ".buona/hooks"
+    },
+    "hooks": {
+      "type": "object",
+      "description": "Explicit hook definitions. Keys are \"pre<command>\" or \"post<command>\". Values are either a build system name (to delegate to that system) or a shell command string.",
+      "propertyNames": {
+        "pattern": "^(pre|post).+"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "description": "A build system name (e.g. \"cargo\", \"npm\") or a shell command (e.g. \"./scripts/gen.sh\")."
+      }
+    }
+  },
+  "$defs": {
+    "buildSystem": {
+      "type": "string",
+      "description": "A known build system.",
+      "enum": [
+        "cargo",
+        "go",
+        "npm",
+        "pnpm",
+        "yarn",
+        "bun",
+        "uv",
+        "poetry",
+        "make",
+        "gradle",
+        "maven"
+      ]
+    },
+    "commandConfig": {
+      "type": "object",
+      "description": "Override configuration for a specific command.",
+      "additionalProperties": false,
+      "properties": {
+        "system": {
+          "$ref": "#/$defs/buildSystem",
+          "description": "Override the build system for just this command."
+        },
+        "exec": {
+          "type": "array",
+          "description": "Full exec override: replaces the entire argv for this command.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      }
+    }
+  }
+}

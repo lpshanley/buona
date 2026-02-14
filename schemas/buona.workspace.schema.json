@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://buona.dev/schemas/buona.workspace.schema.json",
+  "title": "Buona Workspace",
+  "description": "Workspace metadata for a buona-managed workspace (buona.workspace.json).",
+  "type": "object",
+  "required": ["name"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "description": "The name of the workspace."
+    }
+  }
+}

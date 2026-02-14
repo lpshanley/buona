@@ -104,6 +104,51 @@ pub(crate) enum PlanKind {
     ExecOverride,
 }
 
+/// The phase at which a hook runs relative to the main command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookPhase {
+    Pre,
+    Post,
+}
+
+impl fmt::Display for HookPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HookPhase::Pre => write!(f, "pre"),
+            HookPhase::Post => write!(f, "post"),
+        }
+    }
+}
+
+/// How a hook was resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookSource {
+    /// Defined explicitly in the `hooks` map of buona.json.
+    Explicit,
+    /// Discovered as a file in `hooksDir`.
+    Convention,
+}
+
+/// A fully resolved hook, ready to execute.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct ResolvedHook {
+    /// Pre or post.
+    pub(crate) phase: HookPhase,
+    /// The hook name (e.g., "prebuild", "posttest").
+    pub(crate) name: String,
+    /// How this hook was found.
+    pub(crate) source: HookSource,
+    /// The program to execute.
+    pub(crate) program: String,
+    /// Arguments to the program.
+    pub(crate) args: Vec<String>,
+    /// Working directory.
+    pub(crate) cwd: PathBuf,
+    /// Human-readable display string.
+    pub(crate) display: String,
+}
+
 /// The fully resolved execution plan. Contains everything needed to spawn the process.
 #[derive(Debug, Clone)]
 pub(crate) struct ExecutionPlan {
@@ -170,5 +215,11 @@ mod tests {
         assert_eq!(StandardCommand::parse("my-script"), None);
         assert_eq!(StandardCommand::parse("custom"), None);
         assert_eq!(StandardCommand::parse(""), None);
+    }
+
+    #[test]
+    fn hook_phase_display() {
+        assert_eq!(HookPhase::Pre.to_string(), "pre");
+        assert_eq!(HookPhase::Post.to_string(), "post");
     }
 }

@@ -3,6 +3,7 @@
 mod config;
 mod detect;
 mod error;
+mod hooks;
 mod ops;
 mod resolve;
 mod systems;
