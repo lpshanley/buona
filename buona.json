@@ -1,6 +1,3 @@
 {
-    "$schema": "./schemas/buona.schema.json",
-    "commands": {
-        "test": { "exec": ["cargo", "test"]}
-    }
+    "$schema": "./schemas/buona.schema.json"
 }

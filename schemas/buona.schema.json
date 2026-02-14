@@ -57,7 +57,8 @@
         "poetry",
         "make",
         "gradle",
-        "maven"
+        "maven",
+        "just"
       ]
     },
     "commandConfig": {

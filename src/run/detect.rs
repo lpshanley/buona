@@ -157,6 +157,30 @@ mod tests {
     }
 
     #[test]
+    fn detects_just_from_justfile() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("justfile"), "default:\n\techo hi").unwrap();
+
+        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Just));
+    }
+
+    #[test]
+    fn detects_just_from_capital_justfile() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Justfile"), "default:\n\techo hi").unwrap();
+
+        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Just));
+    }
+
+    #[test]
+    fn detects_just_from_dot_justfile() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join(".justfile"), "default:\n\techo hi").unwrap();
+
+        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Just));
+    }
+
+    #[test]
     fn detects_gradle_from_build_gradle() {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("build.gradle"), "plugins {}").unwrap();

@@ -22,6 +22,9 @@ pub(super) fn marker_files() -> &'static [(&'static str, BuildSystem)] {
         ("build.gradle", BuildSystem::Gradle),
         ("pom.xml", BuildSystem::Maven),
         ("pyproject.toml", BuildSystem::Uv),
+        ("justfile", BuildSystem::Just),
+        ("Justfile", BuildSystem::Just),
+        (".justfile", BuildSystem::Just),
         ("Makefile", BuildSystem::Make),
     ]
 }
@@ -169,6 +172,13 @@ pub(super) fn standard_mapping(
         (BuildSystem::Make, StandardCommand::Install) => ("make", vec!["install"]),
         (BuildSystem::Make, _) => return None,
 
+        // ── just ─────────────────────────────────────
+        (BuildSystem::Just, StandardCommand::Build) => ("just", vec![]),
+        (BuildSystem::Just, StandardCommand::Test) => ("just", vec!["test"]),
+        (BuildSystem::Just, StandardCommand::Clean) => ("just", vec!["clean"]),
+        (BuildSystem::Just, StandardCommand::Install) => ("just", vec!["install"]),
+        (BuildSystem::Just, _) => return None,
+
         // ── gradle ───────────────────────────────────
         (BuildSystem::Gradle, StandardCommand::Build) => return Some(gradle_mapping("build", extra_args, package_dir)),
         (BuildSystem::Gradle, StandardCommand::Test) => return Some(gradle_mapping("test", extra_args, package_dir)),
@@ -271,6 +281,7 @@ pub(super) fn proxy_command(
             vec!["run".to_string(), command.to_string()],
         ),
         BuildSystem::Make => ("make".to_string(), vec![command.to_string()]),
+        BuildSystem::Just => ("just".to_string(), vec![command.to_string()]),
         BuildSystem::Gradle => {
             let program = detect_gradle_program(package_dir);
             (program, vec![command.to_string()])
@@ -474,6 +485,71 @@ mod tests {
     fn make_bench_returns_none() {
         let result = standard_mapping(
             BuildSystem::Make,
+            StandardCommand::Bench,
+            &[],
+            None,
+        );
+        assert!(result.is_none());
+    }
+
+    // ── just tests ───────────────────────────────────────────────
+
+    #[test]
+    fn just_build_has_no_target() {
+        let (prog, args) = standard_mapping(
+            BuildSystem::Just,
+            StandardCommand::Build,
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(prog, "just");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn just_test_mapping() {
+        let (prog, args) = standard_mapping(
+            BuildSystem::Just,
+            StandardCommand::Test,
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(prog, "just");
+        assert_eq!(args, vec!["test"]);
+    }
+
+    #[test]
+    fn just_clean_mapping() {
+        let (prog, args) = standard_mapping(
+            BuildSystem::Just,
+            StandardCommand::Clean,
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(prog, "just");
+        assert_eq!(args, vec!["clean"]);
+    }
+
+    #[test]
+    fn just_install_mapping() {
+        let (prog, args) = standard_mapping(
+            BuildSystem::Just,
+            StandardCommand::Install,
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(prog, "just");
+        assert_eq!(args, vec!["install"]);
+    }
+
+    #[test]
+    fn just_bench_returns_none() {
+        let result = standard_mapping(
+            BuildSystem::Just,
             StandardCommand::Bench,
             &[],
             None,
@@ -695,6 +771,13 @@ mod tests {
         let (prog, args) = proxy_command(BuildSystem::Maven, "verify", &[], None);
         assert_eq!(prog, "mvn");
         assert_eq!(args, vec!["verify"]);
+    }
+
+    #[test]
+    fn just_proxy_passes_through() {
+        let (prog, args) = proxy_command(BuildSystem::Just, "custom-task", &[], None);
+        assert_eq!(prog, "just");
+        assert_eq!(args, vec!["custom-task"]);
     }
 
     // ── refine_python_system tests ───────────────────────────────

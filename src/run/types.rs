@@ -18,6 +18,7 @@ pub(crate) enum BuildSystem {
     Uv,
     Poetry,
     Make,
+    Just,
     Gradle,
     Maven,
 }
@@ -34,6 +35,7 @@ impl BuildSystem {
         BuildSystem::Uv,
         BuildSystem::Poetry,
         BuildSystem::Make,
+        BuildSystem::Just,
         BuildSystem::Gradle,
         BuildSystem::Maven,
     ];
@@ -51,6 +53,7 @@ impl fmt::Display for BuildSystem {
             BuildSystem::Uv => write!(f, "uv"),
             BuildSystem::Poetry => write!(f, "poetry"),
             BuildSystem::Make => write!(f, "make"),
+            BuildSystem::Just => write!(f, "just"),
             BuildSystem::Gradle => write!(f, "gradle"),
             BuildSystem::Maven => write!(f, "maven"),
         }

@@ -326,6 +326,7 @@ mod tests {
         assert!(parse_as_build_system("npm").is_ok());
         assert!(parse_as_build_system("go").is_ok());
         assert!(parse_as_build_system("make").is_ok());
+        assert!(parse_as_build_system("just").is_ok());
     }
 
     #[test]
