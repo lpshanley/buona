@@ -18,10 +18,37 @@ test *args:
 install:
     cargo install --path .
 
+# Set up development environment (git hooks)
+setup:
+    git config core.hooksPath .githooks
+    @echo "Git hooks configured to use .githooks/"
+
+# Run the full CI check suite locally (mirrors GitHub Actions)
+ci:
+    cargo fmt --all -- --check
+    cargo clippy --all-targets --all-features -- -D warnings
+    cargo test --all-targets --all-features
+
+# Run pre-release checks (formatting + linting)
+pre-release:
+    @echo "Running pre-release checks..."
+    cargo fmt --all -- --check
+    cargo clippy --all-targets --all-features -- -D warnings
+    @echo "Pre-release checks passed!"
+
 # Tag and publish a release (triggers GitHub Actions release workflow)
 release version:
     @if ! echo "{{version}}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then \
       echo "Error: version must match X.Y.Z (example: 0.1.1)"; \
+      exit 1; \
+    fi
+    @if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then \
+      echo "Error: releases must be tagged from the main branch. Current branch: $(git rev-parse --abbrev-ref HEAD)"; \
+      exit 1; \
+    fi
+    @git fetch origin main --quiet
+    @if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then \
+      echo "Error: local main is not up to date with origin/main. Run 'git pull' first."; \
       exit 1; \
     fi
     @if [ -n "$(git status --porcelain)" ]; then \
@@ -32,6 +59,7 @@ release version:
       echo "Error: tag v{{version}} already exists."; \
       exit 1; \
     fi
+    just pre-release
     git tag -a "v{{version}}" -m "Release v{{version}}"
     git push origin "v{{version}}"
 
