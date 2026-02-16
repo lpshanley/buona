@@ -1,4 +1,7 @@
 {
   "system": "just",
-  "$schema": "./schemas/buona.schema.json"
+  "$schema": "./schemas/buona.schema.json",
+  "commands": {
+    "format": { "exec": ["cargo", "fmt", "--all"] }
+  }
 }

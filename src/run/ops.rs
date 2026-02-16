@@ -86,14 +86,15 @@ pub(crate) fn execute(options: RunOptions) -> Result<()> {
     let targets = resolve_targets(&cwd, &ws_root, &options.targets, false)?;
 
     for target in targets {
-        let target_plan = resolve_target_run_plan(
-            target,
-            command_name,
-            extra_args,
-            options.system.clone(),
-        )?;
+        let target_plan =
+            resolve_target_run_plan(target, command_name, extra_args, options.system.clone())?;
 
-        output::print_plan_info(&s, &target_plan.target.label(), &target_plan.plan, options.verbose);
+        output::print_plan_info(
+            &s,
+            &target_plan.target.label(),
+            &target_plan.plan,
+            options.verbose,
+        );
 
         if options.verbose
             && let Some(ref resolution) = target_plan.hooks
@@ -362,11 +363,14 @@ fn list_workspace_package_targets(ws_root: &Path) -> Result<Vec<ExecutionTarget>
     }
 
     let entries = fs::read_dir(&src_dir).map_err(|e| {
-        RunError::ConfigError(format!("could not read src directory {}: {e}", src_dir.display()))
+        RunError::ConfigError(format!(
+            "could not read src directory {}: {e}",
+            src_dir.display()
+        ))
     })?;
     for entry in entries {
-        let entry = entry
-            .map_err(|e| RunError::ConfigError(format!("could not read src entry: {e}")))?;
+        let entry =
+            entry.map_err(|e| RunError::ConfigError(format!("could not read src entry: {e}")))?;
         let path = entry.path();
         if !path.is_dir() {
             continue;
@@ -407,7 +411,11 @@ pub(crate) fn detect(targets: Vec<String>, recursive: bool) -> Result<()> {
     println!();
     for target in detect_targets {
         let detections = detect_all_systems(&target.dir);
-        println!("  {} {}", s.bold.apply_to("target:"), s.cyan.apply_to(target.label()));
+        println!(
+            "  {} {}",
+            s.bold.apply_to("target:"),
+            s.cyan.apply_to(target.label())
+        );
         if detections.is_empty() {
             println!("    {} noop", s.dim.apply_to("—"));
             continue;

@@ -17,7 +17,11 @@ pub(super) fn print_plan_info(s: &Styles, pkg_name: &str, plan: &ExecutionPlan, 
     if verbose {
         match plan.system {
             Some(system) => println!("  {}  system: {}", s.dim.apply_to("│"), system),
-            None => println!("  {}  system: {}", s.dim.apply_to("│"), s.dim.apply_to("none")),
+            None => println!(
+                "  {}  system: {}",
+                s.dim.apply_to("│"),
+                s.dim.apply_to("none")
+            ),
         }
         println!("  {}  kind: {:?}", s.dim.apply_to("│"), plan.kind);
         if let Some(reason) = plan.skip_reason {
