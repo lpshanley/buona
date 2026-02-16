@@ -23,7 +23,6 @@ pub(super) fn marker_files() -> &'static [(&'static str, BuildSystem)] {
         ("pom.xml", BuildSystem::Maven),
         ("pyproject.toml", BuildSystem::Uv),
         ("justfile", BuildSystem::Just),
-        ("Justfile", BuildSystem::Just),
         (".justfile", BuildSystem::Just),
         ("Makefile", BuildSystem::Make),
     ]
