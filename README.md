@@ -1,6 +1,6 @@
-# buona
+# Buona 🤌😘
 
-**The Good CLI** — making life easier when managing complex workspace and build tasks.
+**The Good CLI** — Workspace Bliss – Build More, Fuss Less.
 
 *Buona* (Italian for "good") is a lightweight command-line tool for organizing and managing workspaces. It gives you a single, consistent interface for creating, listing, and deleting project workspaces — and for adding and removing packages within them — so you can focus on building rather than bookkeeping.
 
