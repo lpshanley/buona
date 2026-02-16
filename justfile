@@ -18,6 +18,23 @@ test *args:
 install:
     cargo install --path .
 
+# Tag and publish a release (triggers GitHub Actions release workflow)
+release version:
+    @if ! echo "{{version}}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then \
+      echo "Error: version must match X.Y.Z (example: 0.1.1)"; \
+      exit 1; \
+    fi
+    @if [ -n "$(git status --porcelain)" ]; then \
+      echo "Error: git worktree is dirty. Commit or stash changes before releasing."; \
+      exit 1; \
+    fi
+    @if git rev-parse "v{{version}}" >/dev/null 2>&1; then \
+      echo "Error: tag v{{version}} already exists."; \
+      exit 1; \
+    fi
+    git tag -a "v{{version}}" -m "Release v{{version}}"
+    git push origin "v{{version}}"
+
 # Generate HTML coverage report (line + branch)
 coverage:
     cargo tarpaulin --out Html --target-dir target/coverage

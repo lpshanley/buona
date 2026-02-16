@@ -1,5 +1,8 @@
 # Buona 🤌😘
 
+[![CI](https://github.com/lpshanley/buona/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lpshanley/buona/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/lpshanley/buona/branch/main/graph/badge.svg)](https://codecov.io/gh/lpshanley/buona)
+
 **The Good CLI** — Workspace Bliss – Build More, Fuss Less.
 
 *Buona* (Italian for "good") is a lightweight command-line tool for organizing and managing workspaces. It gives you a single, consistent interface for creating, listing, and deleting project workspaces — and for adding and removing packages within them — so you can focus on building rather than bookkeeping.
@@ -555,10 +558,25 @@ just run <args>
 # Run tests
 just test
 
+# Create and push release tag (triggers GitHub release workflow)
+just release 0.1.1
+
 # Example commands
 just config show
 just workspace list
 ```
+
+## Releasing
+
+1. Update `version` in `Cargo.toml`.
+2. Commit and push your changes to `main`.
+3. Create and push a release tag:
+
+```sh
+just release 0.1.1
+```
+
+This creates `v0.1.1`, pushes the tag, and triggers GitHub Actions to build and publish binaries for Linux, Intel macOS, and Apple Silicon macOS.
 
 ## License
 
