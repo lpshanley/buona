@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::config::HookValue;
 use super::error::RunError;
 use super::systems::{proxy_command, standard_mapping};
 use super::types::*;
@@ -85,7 +86,7 @@ pub(super) struct HookResolveInput {
     /// The package directory (cwd for hook execution).
     pub(super) package_dir: PathBuf,
     /// Explicit hooks from `buona.json` (if present).
-    pub(super) explicit_hooks: HashMap<String, String>,
+    pub(super) explicit_hooks: HashMap<String, HookValue>,
     /// Hook files discovered from `hooksDir` scanning.
     pub(super) convention_hooks: Vec<HookFile>,
 }
@@ -98,7 +99,7 @@ pub(super) struct HookWarning {
 }
 
 /// Result of hook resolution: resolved hooks plus any warnings.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct HookResolution {
     pub(super) pre_hook: Option<ResolvedHook>,
     pub(super) post_hook: Option<ResolvedHook>,
@@ -144,19 +145,14 @@ fn resolve_single_hook(
     hook_name: &str,
     phase: HookPhase,
     package_dir: &Path,
-    explicit_hooks: &HashMap<String, String>,
+    explicit_hooks: &HashMap<String, HookValue>,
     convention_hooks: &[HookFile],
     warnings: &mut Vec<HookWarning>,
 ) -> Result<Option<ResolvedHook>, RunError> {
     // 1. Check explicit hooks map (highest priority)
     if let Some(value) = explicit_hooks.get(hook_name) {
-        return Ok(Some(resolve_hook_value(
-            hook_name,
-            phase,
-            value,
-            package_dir,
-            HookSource::Explicit,
-        )));
+        return resolve_hook_value(hook_name, phase, value, package_dir, HookSource::Explicit)
+            .map(Some);
     }
 
     // 2. Check convention-based hooks
@@ -209,28 +205,67 @@ fn resolve_single_hook(
     }
 }
 
-/// Interpret a hook value string.
+/// Interpret an explicit hook value.
 ///
-/// If the value is a recognized build system name, use that system's template
-/// for the command derived from the hook name. Otherwise, treat it as a
-/// verbatim shell command and run via `sh -c`.
+/// - String values: if recognized as a build system name, use that system's
+///   template for the command derived from the hook name. Otherwise treat as a
+///   verbatim shell command and run via `sh -c`.
+/// - Array values: execute directly as argv (`[program, arg1, ...]`).
 fn resolve_hook_value(
     hook_name: &str,
     phase: HookPhase,
-    value: &str,
+    value: &HookValue,
     package_dir: &Path,
     source: HookSource,
-) -> ResolvedHook {
-    // Try parsing as a build system
-    if let Ok(system) = parse_as_build_system(value) {
-        let command = strip_hook_prefix(hook_name);
+) -> Result<ResolvedHook, RunError> {
+    match value {
+        HookValue::Argv(argv) => {
+            if argv.is_empty() {
+                return Err(RunError::ConfigError(format!(
+                    "hook \"{hook_name}\" has empty argv; expected at least a program"
+                )));
+            }
 
-        // Try standard mapping first
-        if let Some(std_cmd) = StandardCommand::parse(&command) {
-            if let Some((program, args)) = standard_mapping(system, std_cmd, &[], Some(package_dir))
-            {
+            let program = argv[0].clone();
+            let args = argv[1..].to_vec();
+            let display = format_display(&program, &args);
+            Ok(ResolvedHook {
+                phase,
+                name: hook_name.to_string(),
+                source,
+                program,
+                args,
+                cwd: package_dir.to_path_buf(),
+                display,
+            })
+        }
+        HookValue::Script(script) => {
+            // Try parsing as a build system
+            if let Ok(system) = parse_as_build_system(script) {
+                let command = strip_hook_prefix(hook_name);
+
+                // Try standard mapping first
+                if let Some(std_cmd) = StandardCommand::parse(&command) {
+                    if let Some((program, args)) =
+                        standard_mapping(system, std_cmd, &[], Some(package_dir))
+                    {
+                        let display = format_display(&program, &args);
+                        return Ok(ResolvedHook {
+                            phase,
+                            name: hook_name.to_string(),
+                            source,
+                            program,
+                            args,
+                            cwd: package_dir.to_path_buf(),
+                            display,
+                        });
+                    }
+                }
+
+                // Fall back to proxy command
+                let (program, args) = proxy_command(system, &command, &[], Some(package_dir));
                 let display = format_display(&program, &args);
-                return ResolvedHook {
+                return Ok(ResolvedHook {
                     phase,
                     name: hook_name.to_string(),
                     source,
@@ -238,33 +273,20 @@ fn resolve_hook_value(
                     args,
                     cwd: package_dir.to_path_buf(),
                     display,
-                };
+                });
             }
+
+            // Not a system name — treat as verbatim shell command
+            Ok(ResolvedHook {
+                phase,
+                name: hook_name.to_string(),
+                source,
+                program: "sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+                cwd: package_dir.to_path_buf(),
+                display: script.to_string(),
+            })
         }
-
-        // Fall back to proxy command
-        let (program, args) = proxy_command(system, &command, &[], Some(package_dir));
-        let display = format_display(&program, &args);
-        return ResolvedHook {
-            phase,
-            name: hook_name.to_string(),
-            source,
-            program,
-            args,
-            cwd: package_dir.to_path_buf(),
-            display,
-        };
-    }
-
-    // Not a system name — treat as verbatim shell command
-    ResolvedHook {
-        phase,
-        name: hook_name.to_string(),
-        source,
-        program: "sh".to_string(),
-        args: vec!["-c".to_string(), value.to_string()],
-        cwd: package_dir.to_path_buf(),
-        display: value.to_string(),
     }
 }
 
@@ -343,10 +365,11 @@ mod tests {
         let hook = resolve_hook_value(
             "prebuild",
             HookPhase::Pre,
-            "./scripts/gen.sh",
+            &HookValue::Script("./scripts/gen.sh".to_string()),
             dir.path(),
             HookSource::Explicit,
-        );
+        )
+        .unwrap();
         assert_eq!(hook.program, "sh");
         assert_eq!(hook.args, vec!["-c", "./scripts/gen.sh"]);
         assert_eq!(hook.display, "./scripts/gen.sh");
@@ -359,10 +382,11 @@ mod tests {
         let hook = resolve_hook_value(
             "pretest",
             HookPhase::Pre,
-            "docker compose up -d postgres",
+            &HookValue::Script("docker compose up -d postgres".to_string()),
             dir.path(),
             HookSource::Explicit,
-        );
+        )
+        .unwrap();
         assert_eq!(hook.program, "sh");
         assert_eq!(hook.args, vec!["-c", "docker compose up -d postgres"]);
     }
@@ -373,10 +397,11 @@ mod tests {
         let hook = resolve_hook_value(
             "prelint",
             HookPhase::Pre,
-            "cargo",
+            &HookValue::Script("cargo".to_string()),
             dir.path(),
             HookSource::Explicit,
-        );
+        )
+        .unwrap();
         // cargo's lint mapping is "cargo clippy"
         assert_eq!(hook.program, "cargo");
         assert_eq!(hook.args, vec!["clippy"]);
@@ -388,10 +413,11 @@ mod tests {
         let hook = resolve_hook_value(
             "prebuild",
             HookPhase::Pre,
-            "npm",
+            &HookValue::Script("npm".to_string()),
             dir.path(),
             HookSource::Explicit,
-        );
+        )
+        .unwrap();
         // npm's build mapping is "npm run build"
         assert_eq!(hook.program, "npm");
         assert_eq!(hook.args, vec!["run", "build"]);
@@ -403,12 +429,32 @@ mod tests {
         let hook = resolve_hook_value(
             "pretest",
             HookPhase::Pre,
-            "make",
+            &HookValue::Script("make".to_string()),
             dir.path(),
             HookSource::Explicit,
-        );
+        )
+        .unwrap();
         assert_eq!(hook.program, "make");
         assert_eq!(hook.args, vec!["test"]);
+    }
+
+    #[test]
+    fn hook_value_argv_executes_directly() {
+        let dir = TempDir::new().unwrap();
+        let hook = resolve_hook_value(
+            "prebuild",
+            HookPhase::Pre,
+            &HookValue::Argv(vec![
+                "pnpm".to_string(),
+                "run".to_string(),
+                "build".to_string(),
+            ]),
+            dir.path(),
+            HookSource::Explicit,
+        )
+        .unwrap();
+        assert_eq!(hook.program, "pnpm");
+        assert_eq!(hook.args, vec!["run", "build"]);
     }
 
     // ── resolve_hooks (pure resolution) ─────────────────────────────
@@ -432,7 +478,10 @@ mod tests {
     fn explicit_pre_hook_resolved() {
         let dir = TempDir::new().unwrap();
         let mut explicit = HashMap::new();
-        explicit.insert("prebuild".to_string(), "./gen.sh".to_string());
+        explicit.insert(
+            "prebuild".to_string(),
+            HookValue::Script("./gen.sh".to_string()),
+        );
 
         let input = HookResolveInput {
             command: "build".to_string(),
@@ -455,7 +504,10 @@ mod tests {
     fn explicit_post_hook_resolved() {
         let dir = TempDir::new().unwrap();
         let mut explicit = HashMap::new();
-        explicit.insert("posttest".to_string(), "docker compose down".to_string());
+        explicit.insert(
+            "posttest".to_string(),
+            HookValue::Script("docker compose down".to_string()),
+        );
 
         let input = HookResolveInput {
             command: "test".to_string(),
@@ -476,8 +528,14 @@ mod tests {
     fn both_pre_and_post_hooks_resolved() {
         let dir = TempDir::new().unwrap();
         let mut explicit = HashMap::new();
-        explicit.insert("prebuild".to_string(), "./gen.sh".to_string());
-        explicit.insert("postbuild".to_string(), "./copy-assets.sh".to_string());
+        explicit.insert(
+            "prebuild".to_string(),
+            HookValue::Script("./gen.sh".to_string()),
+        );
+        explicit.insert(
+            "postbuild".to_string(),
+            HookValue::Script("./copy-assets.sh".to_string()),
+        );
 
         let input = HookResolveInput {
             command: "build".to_string(),
@@ -517,7 +575,10 @@ mod tests {
     fn explicit_takes_precedence_over_convention() {
         let dir = TempDir::new().unwrap();
         let mut explicit = HashMap::new();
-        explicit.insert("prebuild".to_string(), "echo explicit".to_string());
+        explicit.insert(
+            "prebuild".to_string(),
+            HookValue::Script("echo explicit".to_string()),
+        );
 
         let convention_file = HookFile {
             name: "prebuild".to_string(),
@@ -596,7 +657,10 @@ mod tests {
     fn hooks_for_unrelated_command_not_resolved() {
         let dir = TempDir::new().unwrap();
         let mut explicit = HashMap::new();
-        explicit.insert("prebuild".to_string(), "echo build hook".to_string());
+        explicit.insert(
+            "prebuild".to_string(),
+            HookValue::Script("echo build hook".to_string()),
+        );
 
         let input = HookResolveInput {
             command: "test".to_string(), // asking for test, but only build hook exists
@@ -613,7 +677,10 @@ mod tests {
     fn mixed_explicit_and_convention_hooks() {
         let dir = TempDir::new().unwrap();
         let mut explicit = HashMap::new();
-        explicit.insert("prebuild".to_string(), "echo pre".to_string());
+        explicit.insert(
+            "prebuild".to_string(),
+            HookValue::Script("echo pre".to_string()),
+        );
 
         let convention_file = HookFile {
             name: "postbuild".to_string(),

@@ -13,6 +13,16 @@ use serde::Deserialize;
 
 use super::types::BuildSystem;
 
+/// Explicit hook value in `buona.json`.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub(super) enum HookValue {
+    /// A shell command/script string.
+    Script(String),
+    /// An explicit argv array: [program, arg1, ...].
+    Argv(Vec<String>),
+}
+
 /// Per-command override in `buona.json`.
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct CommandConfig {
@@ -54,9 +64,11 @@ pub(super) struct BuonaRunConfig {
     pub(super) hooks_dir: String,
 
     /// Explicit hook definitions. Keys are `pre<command>` or `post<command>`.
-    /// Values are either a recognized system name or a literal shell command.
+    /// Values can be either:
+    /// - string: a recognized system name or a literal shell command
+    /// - array: explicit argv `[program, arg1, ...]`
     #[serde(default)]
-    pub(super) hooks: HashMap<String, String>,
+    pub(super) hooks: HashMap<String, HookValue>,
 }
 
 fn default_system_str() -> String {
@@ -195,8 +207,38 @@ mod tests {
 
         let config = load_package_config(dir.path()).unwrap().unwrap();
         assert_eq!(config.hooks.len(), 2);
-        assert_eq!(config.hooks["prebuild"], "./scripts/gen.sh");
-        assert_eq!(config.hooks["posttest"], "docker compose down");
+        assert_eq!(
+            config.hooks["prebuild"],
+            HookValue::Script("./scripts/gen.sh".to_string())
+        );
+        assert_eq!(
+            config.hooks["posttest"],
+            HookValue::Script("docker compose down".to_string())
+        );
+    }
+
+    #[test]
+    fn load_config_with_hook_argv() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join(PACKAGE_CONFIG_FILE),
+            r#"{
+                "hooks": {
+                    "prebuild": ["pnpm", "run", "build"]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let config = load_package_config(dir.path()).unwrap().unwrap();
+        assert_eq!(
+            config.hooks["prebuild"],
+            HookValue::Argv(vec![
+                "pnpm".to_string(),
+                "run".to_string(),
+                "build".to_string(),
+            ])
+        );
     }
 
     #[test]

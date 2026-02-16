@@ -16,7 +16,7 @@
 - **Build system detection** — Auto-detects Cargo, Go, npm, pnpm, yarn, Bun, uv, Poetry, Make, Gradle, and Maven projects.
 - **Universal build commands** — Run standardized commands (`build`, `test`, `lint`, etc.) across any project via `buona run`.
 - **Lifecycle hooks** — Configure `pre<command>` and `post<command>` hooks in `buona.json` or as executable scripts.
-- **Per-package configuration** — Fine-tune build system and commands via `buona.json`.
+- **Target configuration** — Fine-tune build system and commands via `buona.json` per execution target (workspace root or package).
 
 ## Installation
 
@@ -184,7 +184,20 @@ buona ws adopt ~/projects/my-library --name custom-name
 buona detect
 ```
 
-Prints the auto-detected build system for the current package. This is useful for verifying buona correctly identifies your project type before running commands.
+Prints the auto-detected build system for the closest context (package if inside `src/<pkg>`, otherwise workspace root).
+
+You can also target specific locations:
+
+```sh
+# detect only at workspace root
+buona detect -t root
+
+# detect in explicit order
+buona detect -t root -t api -t web
+
+# detect workspace root + all packages (alphabetical)
+buona detect -r
+```
 
 ### 11. Run build commands
 
@@ -204,7 +217,7 @@ Buona provides universal build commands that work consistently across all your p
 buona detect
 ```
 
-Prints the auto-detected build system for the current package, including all detected marker files. This helps you verify that buona correctly identifies your project type.
+Prints the auto-detected build system for the closest context (package if inside `src/<pkg>`, otherwise workspace root), including all detected marker files. This helps you verify that buona correctly identifies your project type.
 
 Example output:
 ```
@@ -220,7 +233,7 @@ Example output:
 buona run <COMMAND> [ARGS...]
 ```
 
-Executes a build command within the current package's build system. Buona automatically detects the build system and maps standard commands to the appropriate tool invocation.
+Executes a build command in the closest context by default (package if inside `src/<pkg>`, otherwise workspace root). Buona automatically detects the build system and maps standard commands to the appropriate tool invocation.
 
 **Standard commands** (mapped across all build systems):
 | Command | Description |
@@ -247,13 +260,29 @@ buona run test -- --nocapture
 
 # Run a non-standard command (proxied through the build system)
 buona run my-custom-script
+
+# Run only in the workspace root
+buona run build -t root
+
+# Run in explicit ordered targets
+buona run test -t api -t web
+
+# Recursive orchestration: root + all packages (alphabetical)
+buona run install -r
+
+# Preview staged graph with noop leaves
+buona run install --dry-run -r
 ```
 
 **Options:**
 - `--system <SYSTEM>` — Force a specific build system (overrides auto-detection)
 - `--dry-run` — Show the resolved command without executing it
 - `--verbose` — Print detailed resolution information
+- `--target <root|PACKAGE>` / `-t` — Run only for the provided target(s), in the order provided
+- `--recursive` / `-r` — Run staged orchestration for workspace root and all packages (alphabetical)
 - `--` — Pass remaining arguments to the underlying tool
+
+When `--dry-run` is used with `-t` or `-r`, buona prints a staged execution graph and renders missing leaves as dimmed `noop` (e.g., no pre/post hook for that stage). If a command stage cannot be resolved (for example no build system detected), it is shown as `skipped` and `--verbose` includes the reason.
 
 **Supported build systems:**
 | System | Marker Files | Notes |
@@ -270,9 +299,9 @@ buona run my-custom-script
 | `gradle` | `build.gradle`, `build.gradle.kts` | Prefers `gradlew` wrapper if present |
 | `maven` | `pom.xml` | Prefers `mvnw` wrapper if present |
 
-## Per-Package Configuration (`buona.json`)
+## Target Configuration (`buona.json`)
 
-Create a `buona.json` file in a package root to customize build system behavior for that package.
+Create a `buona.json` file in any execution target directory (workspace root or package root) to customize build system behavior for that target.
 
 ### Example `buona.json`
 
@@ -295,9 +324,9 @@ Create a `buona.json` file in a package root to customize build system behavior 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `system` | string | Global build system for this package (`"auto"` or a system name) |
+| `system` | string | Global build system for this target (`"auto"` or a system name) |
 | `commands` | object | Per-command overrides (see below) |
-| `hooksDir` | string | Directory to scan for convention-based hook scripts (default: `.buona/hooks`) |
+| `hooksDir` | string | Directory to scan for convention-based hook scripts (default: `.buona/hooks`, resolved from the directory containing `buona.json`) |
 | `hooks` | object | Explicit hook definitions (keys: `pre<command>` or `post<command>`) |
 
 ### Command overrides
@@ -336,8 +365,9 @@ Hooks are `pre<command>` and `post<command>` scripts that run before and after t
 ```
 
 Hook values can be:
-- A **build system name** (e.g., `"cargo"`, `"npm"`) — buona will use that system's template for the command
-- A **shell command** — executed via `sh -c`
+- A **build system name** string (e.g., `"cargo"`, `"npm"`) — buona will use that system's template for the command
+- A **shell command** string — executed via `sh -c`
+- An **argv array** (e.g., `["pnpm", "run", "build"]`) — executed directly as program + args
 
 ### Convention-based hooks
 
@@ -382,8 +412,8 @@ buona run build --dry-run
 
 Commands:
   config     View or set up the global configuration
-  detect     Print the auto-detected build system for the current package
-  run        Run a command within the current package's build system
+  detect     Print the auto-detected build system for context/target(s)
+  run        Run a command in context/target(s)
   workspace  Manage workspaces (alias: ws)
 ```
 

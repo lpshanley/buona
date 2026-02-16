@@ -105,6 +105,26 @@ pub(crate) enum PlanKind {
     Proxy,
     /// An explicit exec override from buona.json (e.g., "test" → ["pnpm", "run", "custom-test"]).
     ExecOverride,
+    /// No runnable command was resolved for this target.
+    Noop,
+}
+
+/// Why a command stage was intentionally skipped/nooped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SkipReason {
+    /// No build system could be resolved via config/CLI/detection.
+    NoSystemDetected,
+    /// Command is standard, but the resolved system has no mapping for it.
+    StandardNotMapped,
+}
+
+impl SkipReason {
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            SkipReason::NoSystemDetected => "no-system",
+            SkipReason::StandardNotMapped => "unmapped",
+        }
+    }
 }
 
 /// The phase at which a hook runs relative to the main command.
@@ -157,16 +177,18 @@ pub(crate) struct ResolvedHook {
 pub(crate) struct ExecutionPlan {
     /// Working directory for the command.
     pub(crate) cwd: PathBuf,
-    /// The resolved build system.
-    pub(crate) system: BuildSystem,
+    /// The resolved build system, when one exists.
+    pub(crate) system: Option<BuildSystem>,
     /// How this plan was derived.
     pub(crate) kind: PlanKind,
-    /// The program to execute (e.g., "cargo", "npm").
-    pub(crate) program: String,
+    /// The program to execute (e.g., "cargo", "npm") when runnable.
+    pub(crate) program: Option<String>,
     /// Arguments to pass to the program.
     pub(crate) args: Vec<String>,
-    /// Human-readable display string for output (e.g., "cargo test -- --nocapture").
+    /// Human-readable display string for output.
     pub(crate) display: String,
+    /// Why this plan is skipped/noop, if applicable.
+    pub(crate) skip_reason: Option<SkipReason>,
 }
 
 #[cfg(test)]

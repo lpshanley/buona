@@ -37,10 +37,19 @@ enum Commands {
         command: WorkspaceCommands,
     },
 
-    /// Print the auto-detected build system for the current package
-    Detect,
+    /// Print the auto-detected build system for the current context/target(s)
+    Detect {
+        /// Execute detection only for the provided target(s): `root` or package name.
+        /// Can be repeated and runs in the provided order.
+        #[arg(short = 't', long = "target")]
+        targets: Vec<String>,
 
-    /// Run a command within the current package's build system
+        /// Detect recursively across workspace root and all packages (alphabetical)
+        #[arg(short, long)]
+        recursive: bool,
+    },
+
+    /// Run a command in the current context or explicit target(s)
     Run {
         /// Force a specific build system (overrides auto-detection)
         #[arg(long)]
@@ -53,6 +62,15 @@ enum Commands {
         /// Print detailed resolution information
         #[arg(short, long)]
         verbose: bool,
+
+        /// Execute only for the provided target(s): `root` or package name.
+        /// Can be repeated and runs in the provided order.
+        #[arg(short = 't', long = "target")]
+        targets: Vec<String>,
+
+        /// Execute recursively across workspace root and all packages (alphabetical)
+        #[arg(short, long)]
+        recursive: bool,
 
         /// The command to run (e.g. build, test, lint)
         command: String,
@@ -274,8 +292,8 @@ fn main() -> anyhow::Result<()> {
                 )?;
             }
         },
-        Commands::Detect => {
-            if let Err(e) = run::detect() {
+        Commands::Detect { targets, recursive } => {
+            if let Err(e) = run::detect(targets, recursive) {
                 if let Some(run_err) = e.downcast_ref::<run::RunError>() {
                     run_err.exit();
                 }
@@ -287,6 +305,8 @@ fn main() -> anyhow::Result<()> {
             system,
             dry_run,
             verbose,
+            targets,
+            recursive,
             command,
             args,
         } => {
@@ -294,6 +314,8 @@ fn main() -> anyhow::Result<()> {
                 system,
                 dry_run,
                 verbose,
+                targets,
+                recursive,
                 command,
                 args,
             };

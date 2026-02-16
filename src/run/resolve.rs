@@ -52,16 +52,18 @@ pub(super) fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, RunErr
                     input.cli_system.as_deref(),
                     &input.package_dir,
                 )
-                .unwrap_or(BuildSystem::Make); // fallback for display only
+                .ok()
+                .flatten();
 
                 let display = format_display(&program, &args);
                 return Ok(ExecutionPlan {
                     cwd: input.package_dir.clone(),
                     system,
                     kind: PlanKind::ExecOverride,
-                    program,
+                    program: Some(program),
                     args,
                     display,
+                    skip_reason: None,
                 });
             }
         }
@@ -81,6 +83,15 @@ pub(super) fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, RunErr
         &input.package_dir,
     )?;
 
+    if system.is_none() {
+        return Ok(noop_plan(
+            input.package_dir.clone(),
+            None,
+            SkipReason::NoSystemDetected,
+        ));
+    }
+    let system = system.unwrap();
+
     // 3. Check if command is a standard command
     if let Some(std_cmd) = StandardCommand::parse(command_name) {
         if let Some((program, args)) =
@@ -89,18 +100,20 @@ pub(super) fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, RunErr
             let display = format_display(&program, &args);
             return Ok(ExecutionPlan {
                 cwd: input.package_dir.clone(),
-                system,
+                system: Some(system),
                 kind: PlanKind::Standard,
-                program,
+                program: Some(program),
                 args,
                 display,
+                skip_reason: None,
             });
         }
         // Standard command but no mapping for this system
-        return Err(RunError::StandardNotMapped {
-            command: command_name.clone(),
-            system: system.to_string(),
-        });
+        return Ok(noop_plan(
+            input.package_dir.clone(),
+            Some(system),
+            SkipReason::StandardNotMapped,
+        ));
     }
 
     // 4. Non-standard command → proxy
@@ -113,11 +126,12 @@ pub(super) fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, RunErr
     let display = format_display(&program, &args);
     Ok(ExecutionPlan {
         cwd: input.package_dir.clone(),
-        system,
+        system: Some(system),
         kind: PlanKind::Proxy,
-        program,
+        program: Some(program),
         args,
         display,
+        skip_reason: None,
     })
 }
 
@@ -132,34 +146,40 @@ fn resolve_effective_system(
     package_config: Option<&BuonaRunConfig>,
     cli_system: Option<&str>,
     package_dir: &std::path::Path,
-) -> Result<BuildSystem, RunError> {
+) -> Result<Option<BuildSystem>, RunError> {
     // 1. Per-command override
     if let Some(system) = per_command {
-        return Ok(system);
+        return Ok(Some(system));
     }
 
     // 2. Global system in buona.json (if not "auto")
     if let Some(config) = package_config {
         if config.system != "auto" {
-            return parse_system_name(&config.system);
+            return parse_system_name(&config.system).map(Some);
         }
     }
 
     // 3. CLI --system
     if let Some(name) = cli_system {
         if name != "auto" {
-            return parse_system_name(name);
+            return parse_system_name(name).map(Some);
         }
     }
 
     // 4. Auto-detect
-    detect_build_system(package_dir).ok_or_else(|| {
-        RunError::NoPackageResolved(format!(
-            "could not auto-detect build system in {}\n  \
-             Use --system to specify one, or add a buona.json with a \"system\" field.",
-            package_dir.display()
-        ))
-    })
+    Ok(detect_build_system(package_dir))
+}
+
+fn noop_plan(cwd: PathBuf, system: Option<BuildSystem>, reason: SkipReason) -> ExecutionPlan {
+    ExecutionPlan {
+        cwd,
+        system,
+        kind: PlanKind::Noop,
+        program: None,
+        args: vec![],
+        display: "skipped".to_string(),
+        skip_reason: Some(reason),
+    }
 }
 
 /// Parse a system name string into a [`BuildSystem`] enum.
@@ -209,10 +229,10 @@ mod tests {
     fn resolves_cargo_test() {
         let (_dir, input) = input_with_system("test", BuildSystem::Cargo);
         let plan = resolve_plan(&input).unwrap();
-        assert_eq!(plan.program, "cargo");
+        assert_eq!(plan.program.as_deref(), Some("cargo"));
         assert_eq!(plan.args, vec!["test"]);
         assert_eq!(plan.kind, PlanKind::Standard);
-        assert_eq!(plan.system, BuildSystem::Cargo);
+        assert_eq!(plan.system, Some(BuildSystem::Cargo));
     }
 
     #[test]
@@ -227,7 +247,7 @@ mod tests {
             package_config: None,
         };
         let plan = resolve_plan(&input).unwrap();
-        assert_eq!(plan.program, "cargo");
+        assert_eq!(plan.program.as_deref(), Some("cargo"));
         assert_eq!(plan.args, vec!["test", "--", "--nocapture"]);
     }
 
@@ -235,7 +255,7 @@ mod tests {
     fn resolves_npm_build() {
         let (_dir, input) = input_with_system("build", BuildSystem::Npm);
         let plan = resolve_plan(&input).unwrap();
-        assert_eq!(plan.program, "npm");
+        assert_eq!(plan.program.as_deref(), Some("npm"));
         assert_eq!(plan.args, vec!["run", "build"]);
         assert_eq!(plan.kind, PlanKind::Standard);
     }
@@ -254,7 +274,7 @@ mod tests {
             package_config: None,
         };
         let plan = resolve_plan(&input).unwrap();
-        assert_eq!(plan.program, "cargo");
+        assert_eq!(plan.program.as_deref(), Some("cargo"));
         assert_eq!(plan.args, vec!["asm"]);
         assert_eq!(plan.kind, PlanKind::Proxy);
     }
@@ -271,7 +291,7 @@ mod tests {
             package_config: None,
         };
         let plan = resolve_plan(&input).unwrap();
-        assert_eq!(plan.program, "npm");
+        assert_eq!(plan.program.as_deref(), Some("npm"));
         assert_eq!(plan.args, vec!["run", "my-script"]);
         assert_eq!(plan.kind, PlanKind::Proxy);
     }
@@ -290,8 +310,8 @@ mod tests {
             package_config: None,
         };
         let plan = resolve_plan(&input).unwrap();
-        assert_eq!(plan.system, BuildSystem::Cargo);
-        assert_eq!(plan.program, "cargo");
+        assert_eq!(plan.system, Some(BuildSystem::Cargo));
+        assert_eq!(plan.program.as_deref(), Some("cargo"));
     }
 
     #[test]
@@ -332,8 +352,8 @@ mod tests {
             package_config: Some(config),
         };
         let plan = resolve_plan(&input).unwrap();
-        assert_eq!(plan.system, BuildSystem::Npm);
-        assert_eq!(plan.program, "npm");
+        assert_eq!(plan.system, Some(BuildSystem::Npm));
+        assert_eq!(plan.program.as_deref(), Some("npm"));
     }
 
     #[test]
@@ -363,8 +383,8 @@ mod tests {
             package_config: Some(config),
         };
         let plan = resolve_plan(&input).unwrap();
-        assert_eq!(plan.system, BuildSystem::Make);
-        assert_eq!(plan.program, "make");
+        assert_eq!(plan.system, Some(BuildSystem::Make));
+        assert_eq!(plan.program.as_deref(), Some("make"));
         assert!(plan.args.is_empty());
     }
 
@@ -400,7 +420,7 @@ mod tests {
         };
         let plan = resolve_plan(&input).unwrap();
         assert_eq!(plan.kind, PlanKind::ExecOverride);
-        assert_eq!(plan.program, "pnpm");
+        assert_eq!(plan.program.as_deref(), Some("pnpm"));
         assert_eq!(plan.args, vec!["run", "custom-test"]);
     }
 
@@ -463,7 +483,7 @@ mod tests {
             package_config: Some(config),
         };
         let plan = resolve_plan(&input).unwrap();
-        assert_eq!(plan.system, BuildSystem::Make);
+        assert_eq!(plan.system, Some(BuildSystem::Make));
     }
 
     #[test]
@@ -483,7 +503,7 @@ mod tests {
             package_config: Some(config),          // config says npm
         };
         let plan = resolve_plan(&input).unwrap();
-        assert_eq!(plan.system, BuildSystem::Npm); // config wins
+        assert_eq!(plan.system, Some(BuildSystem::Npm)); // config wins
     }
 
     #[test]
@@ -499,13 +519,13 @@ mod tests {
             package_config: None,
         };
         let plan = resolve_plan(&input).unwrap();
-        assert_eq!(plan.system, BuildSystem::Npm); // CLI wins over Cargo.toml
+        assert_eq!(plan.system, Some(BuildSystem::Npm)); // CLI wins over Cargo.toml
     }
 
     // ── standard not mapped ──────────────────────────────────────
 
     #[test]
-    fn standard_not_mapped_returns_error() {
+    fn standard_not_mapped_returns_noop_plan() {
         let dir = TempDir::new().unwrap();
         let input = ResolveInput {
             package_dir: dir.path().to_path_buf(),
@@ -514,21 +534,16 @@ mod tests {
             cli_system: Some("cargo".to_string()),
             package_config: None,
         };
-        let result = resolve_plan(&input);
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            RunError::StandardNotMapped { command, system } => {
-                assert_eq!(command, "dev");
-                assert_eq!(system, "cargo");
-            }
-            other => panic!("expected StandardNotMapped, got: {other}"),
-        }
+        let plan = resolve_plan(&input).unwrap();
+        assert_eq!(plan.kind, PlanKind::Noop);
+        assert_eq!(plan.program, None);
+        assert_eq!(plan.skip_reason, Some(SkipReason::StandardNotMapped));
     }
 
     // ── no system detectable ─────────────────────────────────────
 
     #[test]
-    fn no_system_detectable_returns_error() {
+    fn no_system_detectable_returns_noop_plan() {
         let dir = TempDir::new().unwrap();
         let input = ResolveInput {
             package_dir: dir.path().to_path_buf(),
@@ -537,8 +552,10 @@ mod tests {
             cli_system: None,
             package_config: None,
         };
-        let result = resolve_plan(&input);
-        assert!(result.is_err());
+        let plan = resolve_plan(&input).unwrap();
+        assert_eq!(plan.kind, PlanKind::Noop);
+        assert_eq!(plan.program, None);
+        assert_eq!(plan.skip_reason, Some(SkipReason::NoSystemDetected));
     }
 
     // ── display format ───────────────────────────────────────────

@@ -14,8 +14,6 @@ pub(crate) enum RunError {
     NoPackageResolved(String),
     /// Unknown build system name (exit 66).
     UnknownSystem(String),
-    /// Standard command has no mapping for this system (exit 67).
-    StandardNotMapped { command: String, system: String },
     /// buona.json is malformed or has conflicting settings (exit 68).
     ConfigError(String),
     /// Ambiguous hook: multiple files in hooksDir match the same hook name (exit 69).
@@ -35,7 +33,6 @@ impl RunError {
             RunError::NotInWorkspace(_) => 64,
             RunError::NoPackageResolved(_) => 65,
             RunError::UnknownSystem(_) => 66,
-            RunError::StandardNotMapped { .. } => 67,
             RunError::ConfigError(_) => 68,
             RunError::AmbiguousHook { .. } => 69,
             RunError::HookFailed { exit_code, .. } => *exit_code,
@@ -55,12 +52,6 @@ impl fmt::Display for RunError {
             RunError::NotInWorkspace(msg) => write!(f, "{msg}"),
             RunError::NoPackageResolved(msg) => write!(f, "{msg}"),
             RunError::UnknownSystem(name) => write!(f, "unknown build system: \"{name}\""),
-            RunError::StandardNotMapped { command, system } => {
-                write!(
-                    f,
-                    "command \"{command}\" has no mapping for system \"{system}\""
-                )
-            }
             RunError::ConfigError(msg) => write!(f, "config error: {msg}"),
             RunError::AmbiguousHook {
                 hook_name,
@@ -93,14 +84,6 @@ mod tests {
         assert_eq!(RunError::NotInWorkspace(String::new()).exit_code(), 64);
         assert_eq!(RunError::NoPackageResolved(String::new()).exit_code(), 65);
         assert_eq!(RunError::UnknownSystem(String::new()).exit_code(), 66);
-        assert_eq!(
-            RunError::StandardNotMapped {
-                command: String::new(),
-                system: String::new()
-            }
-            .exit_code(),
-            67
-        );
         assert_eq!(RunError::ConfigError(String::new()).exit_code(), 68);
     }
 
@@ -108,18 +91,6 @@ mod tests {
     fn display_unknown_system() {
         let err = RunError::UnknownSystem("foobar".to_string());
         assert_eq!(err.to_string(), "unknown build system: \"foobar\"");
-    }
-
-    #[test]
-    fn display_standard_not_mapped() {
-        let err = RunError::StandardNotMapped {
-            command: "bench".to_string(),
-            system: "make".to_string(),
-        };
-        assert_eq!(
-            err.to_string(),
-            "command \"bench\" has no mapping for system \"make\""
-        );
     }
 
     #[test]

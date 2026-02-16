@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://buona.dev/schemas/buona.schema.json",
-  "title": "Buona Package Config",
-  "description": "Per-package configuration for buona run (buona.json).",
+  "title": "Buona Run Config",
+  "description": "Target configuration for buona run/detect (buona.json). Applies to whichever execution target directory is selected (workspace root or package directory).",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -11,7 +11,7 @@
     },
     "system": {
       "type": "string",
-      "description": "Global build system for this package. Use \"auto\" for automatic detection or specify a system name.",
+      "description": "Global build system for this target. Use \"auto\" for automatic detection or specify a system name.",
       "default": "auto",
       "anyOf": [
         { "const": "auto" },
@@ -27,18 +27,30 @@
     },
     "hooksDir": {
       "type": "string",
-      "description": "Directory to scan for convention-based hook scripts. Relative paths are resolved from the package root.",
+      "description": "Directory to scan for convention-based hook scripts. Relative paths are resolved from the target directory containing this buona.json.",
       "default": ".buona/hooks"
     },
     "hooks": {
       "type": "object",
-      "description": "Explicit hook definitions. Keys are \"pre<command>\" or \"post<command>\". Values are either a build system name (to delegate to that system) or a shell command string.",
+      "description": "Explicit hook definitions. Keys are \"pre<command>\" or \"post<command>\". Values can be a build system name, a shell command string, or an argv array.",
       "propertyNames": {
         "pattern": "^(pre|post).+"
       },
       "additionalProperties": {
-        "type": "string",
-        "description": "A build system name (e.g. \"cargo\", \"npm\") or a shell command (e.g. \"./scripts/gen.sh\")."
+        "anyOf": [
+          {
+            "type": "string",
+            "description": "A build system name (e.g. \"cargo\", \"npm\") or a shell command (e.g. \"./scripts/gen.sh\")."
+          },
+          {
+            "type": "array",
+            "description": "An explicit argv command: [program, arg1, ...].",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          }
+        ]
       }
     }
   },
