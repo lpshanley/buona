@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "buona",
     version,
-    about = "The Good CLI — making life easier when managing complex workspace and build tasks",
+    about = "The Good CLI — Workspace Bliss – Build More, Fuss Less.",
     arg_required_else_help = true
 )]
 struct Cli {
