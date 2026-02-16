@@ -1,3 +1,4 @@
 {
-    "$schema": "./schemas/buona.schema.json"
+  "system": "just",
+  "$schema": "./schemas/buona.schema.json"
 }
