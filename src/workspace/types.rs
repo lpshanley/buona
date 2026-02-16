@@ -33,8 +33,9 @@ pub(crate) fn read_meta(dir: &Path) -> Result<Option<WorkspaceMeta>> {
             Ok(Some(meta))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e)
-            .with_context(|| format!("could not read {WORKSPACE_FILE} in {}", dir.display())),
+        Err(e) => {
+            Err(e).with_context(|| format!("could not read {WORKSPACE_FILE} in {}", dir.display()))
+        }
     }
 }
 

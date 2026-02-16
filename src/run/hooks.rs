@@ -227,8 +227,7 @@ fn resolve_hook_value(
 
         // Try standard mapping first
         if let Some(std_cmd) = StandardCommand::parse(&command) {
-            if let Some((program, args)) =
-                standard_mapping(system, std_cmd, &[], Some(package_dir))
+            if let Some((program, args)) = standard_mapping(system, std_cmd, &[], Some(package_dir))
             {
                 let display = format_display(&program, &args);
                 return ResolvedHook {

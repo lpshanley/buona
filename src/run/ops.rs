@@ -14,8 +14,9 @@ use super::config::load_package_config;
 use super::detect::detect_all_systems;
 use super::error::RunError;
 use super::hooks::{self, HookResolution};
+use super::output;
 use super::resolve::{ResolveInput, resolve_plan};
-use super::types::{ExecutionPlan, HookSource, PlanKind, ResolvedHook};
+use super::types::{ExecutionPlan, PlanKind, ResolvedHook};
 
 /// CLI options for the run command, parsed by clap and passed from main.
 pub(crate) struct RunOptions {
@@ -53,8 +54,8 @@ pub(crate) fn execute(options: RunOptions) -> Result<()> {
         .to_string();
 
     // 3. Load per-package config (buona.json)
-    let package_config = load_package_config(&pkg_dir)
-        .map_err(|e| RunError::ConfigError(format!("{e}")))?;
+    let package_config =
+        load_package_config(&pkg_dir).map_err(|e| RunError::ConfigError(format!("{e}")))?;
 
     // Extract hook-related fields before moving config into ResolveInput
     let hooks_dir = package_config
@@ -95,32 +96,22 @@ pub(crate) fn execute(options: RunOptions) -> Result<()> {
 
     // Print warnings from hook resolution
     if let Some(ref resolution) = hook_resolution {
-        for warning in &resolution.warnings {
-            eprintln!(
-                "  {} hook \"{}\": {}",
-                s.yellow.apply_to("warning:"),
-                warning.hook_name,
-                warning.message,
-            );
-        }
+        output::print_hook_warnings(&s, resolution);
     }
 
     // 6. Print resolution info
-    print_plan_info(&s, &pkg_name, &plan, options.verbose);
+    output::print_plan_info(&s, &pkg_name, &plan, options.verbose);
 
     if options.verbose {
         if let Some(ref resolution) = hook_resolution {
-            print_hook_info(&s, resolution);
+            output::print_hook_info(&s, resolution);
         }
     }
 
     // 7. Execute or dry-run
     if options.dry_run {
-        print_dry_run_hooks(&s, &hook_resolution);
-        println!(
-            "  {} (dry run — not executing)",
-            s.dim.apply_to("---")
-        );
+        output::print_dry_run_hooks(&s, &hook_resolution);
+        println!("  {} (dry run — not executing)", s.dim.apply_to("---"));
         println!();
         return Ok(());
     }
@@ -168,10 +159,7 @@ pub(crate) fn detect() -> Result<()> {
 
         if detections.len() > 1 {
             println!();
-            println!(
-                "  {}",
-                s.dim.apply_to("Other marker files found:")
-            );
+            println!("  {}", s.dim.apply_to("Other marker files found:"));
             for d in &detections[1..] {
                 println!(
                     "  {}  {} (via {})",
@@ -212,39 +200,7 @@ fn resolve_package_dir(cwd: &Path, ws_root: &Path) -> Result<PathBuf, RunError> 
     ))
 }
 
-fn print_plan_info(s: &Styles, pkg_name: &str, plan: &ExecutionPlan, verbose: bool) {
-    println!();
-    println!(
-        "  {} {} in {}",
-        s.dim.apply_to("→"),
-        s.bold.apply_to(&plan.display),
-        s.cyan.apply_to(pkg_name),
-    );
-
-    if verbose {
-        println!(
-            "  {}  system: {}",
-            s.dim.apply_to("│"),
-            plan.system
-        );
-        println!(
-            "  {}  kind: {:?}",
-            s.dim.apply_to("│"),
-            plan.kind
-        );
-        println!(
-            "  {}  cwd: {}",
-            s.dim.apply_to("│"),
-            plan.cwd.display()
-        );
-    }
-    println!();
-}
-
-fn execute_with_hooks(
-    plan: &ExecutionPlan,
-    hook_resolution: Option<HookResolution>,
-) -> Result<()> {
+fn execute_with_hooks(plan: &ExecutionPlan, hook_resolution: Option<HookResolution>) -> Result<()> {
     let (pre_hook, post_hook) = match hook_resolution {
         Some(res) => (res.pre_hook, res.post_hook),
         None => (None, None),
@@ -304,62 +260,6 @@ fn execute_hook(hook: &ResolvedHook) -> Result<std::process::ExitStatus> {
                 hook.name, hook.program
             )
         })
-}
-
-fn print_hook_info(s: &Styles, resolution: &HookResolution) {
-    let has_hooks = resolution.pre_hook.is_some() || resolution.post_hook.is_some();
-    if !has_hooks {
-        return;
-    }
-    println!("  {}  hooks:", s.dim.apply_to("│"));
-    if let Some(ref hook) = resolution.pre_hook {
-        let source_label = match hook.source {
-            HookSource::Explicit => "explicit",
-            HookSource::Convention => "convention",
-        };
-        println!(
-            "  {}    {}: {} ({})",
-            s.dim.apply_to("│"),
-            hook.name,
-            hook.display,
-            s.dim.apply_to(source_label),
-        );
-    }
-    if let Some(ref hook) = resolution.post_hook {
-        let source_label = match hook.source {
-            HookSource::Explicit => "explicit",
-            HookSource::Convention => "convention",
-        };
-        println!(
-            "  {}    {}: {} ({})",
-            s.dim.apply_to("│"),
-            hook.name,
-            hook.display,
-            s.dim.apply_to(source_label),
-        );
-    }
-    println!();
-}
-
-fn print_dry_run_hooks(s: &Styles, resolution: &Option<HookResolution>) {
-    if let Some(res) = resolution {
-        if let Some(hook) = &res.pre_hook {
-            println!(
-                "  {} {}: {}",
-                s.dim.apply_to("[hook]"),
-                s.bold.apply_to(&hook.name),
-                hook.display,
-            );
-        }
-        if let Some(hook) = &res.post_hook {
-            println!(
-                "  {} {}: {}",
-                s.dim.apply_to("[hook]"),
-                s.bold.apply_to(&hook.name),
-                hook.display,
-            );
-        }
-    }
 }
 
 #[cfg(test)]
@@ -428,24 +328,12 @@ mod tests {
         setup_workspace_with_package(dir.path(), "test-ws", "pkg-a");
         fs::create_dir_all(dir.path().join("src").join("pkg-b")).unwrap();
 
-        let result_a = resolve_package_dir(
-            &dir.path().join("src").join("pkg-a"),
-            dir.path(),
-        )
-        .unwrap();
-        let result_b = resolve_package_dir(
-            &dir.path().join("src").join("pkg-b"),
-            dir.path(),
-        )
-        .unwrap();
+        let result_a =
+            resolve_package_dir(&dir.path().join("src").join("pkg-a"), dir.path()).unwrap();
+        let result_b =
+            resolve_package_dir(&dir.path().join("src").join("pkg-b"), dir.path()).unwrap();
 
-        assert_eq!(
-            result_a.file_name().unwrap().to_string_lossy(),
-            "pkg-a"
-        );
-        assert_eq!(
-            result_b.file_name().unwrap().to_string_lossy(),
-            "pkg-b"
-        );
+        assert_eq!(result_a.file_name().unwrap().to_string_lossy(), "pkg-a");
+        assert_eq!(result_b.file_name().unwrap().to_string_lossy(), "pkg-b");
     }
 }

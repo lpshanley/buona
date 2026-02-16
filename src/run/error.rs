@@ -168,9 +168,6 @@ mod tests {
             hook_name: "prebuild".to_string(),
             exit_code: 1,
         };
-        assert_eq!(
-            err.to_string(),
-            "hook \"prebuild\" failed with exit code 1"
-        );
+        assert_eq!(err.to_string(), "hook \"prebuild\" failed with exit code 1");
     }
 }

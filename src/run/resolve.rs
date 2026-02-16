@@ -104,8 +104,12 @@ pub(super) fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, RunErr
     }
 
     // 4. Non-standard command → proxy
-    let (program, args) =
-        proxy_command(system, command_name, &input.extra_args, Some(&input.package_dir));
+    let (program, args) = proxy_command(
+        system,
+        command_name,
+        &input.extra_args,
+        Some(&input.package_dir),
+    );
     let display = format_display(&program, &args);
     Ok(ExecutionPlan {
         cwd: input.package_dir.clone(),
@@ -447,7 +451,7 @@ mod tests {
         );
         let config = BuonaRunConfig {
             system: "cargo".to_string(), // global says cargo
-            commands,                     // but build says make
+            commands,                    // but build says make
             hooks_dir: ".buona/hooks".to_string(),
             hooks: HashMap::new(),
         };
@@ -476,7 +480,7 @@ mod tests {
             command: "test".to_string(),
             extra_args: vec![],
             cli_system: Some("cargo".to_string()), // CLI says cargo
-            package_config: Some(config),           // config says npm
+            package_config: Some(config),          // config says npm
         };
         let plan = resolve_plan(&input).unwrap();
         assert_eq!(plan.system, BuildSystem::Npm); // config wins
@@ -541,7 +545,14 @@ mod tests {
 
     #[test]
     fn display_format() {
-        let display = format_display("cargo", &["test".to_string(), "--".to_string(), "--nocapture".to_string()]);
+        let display = format_display(
+            "cargo",
+            &[
+                "test".to_string(),
+                "--".to_string(),
+                "--nocapture".to_string(),
+            ],
+        );
         assert_eq!(display, "cargo test -- --nocapture");
     }
 }

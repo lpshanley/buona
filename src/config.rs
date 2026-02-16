@@ -229,19 +229,11 @@ pub(crate) fn print_pretty(config: &BuonaConfig) -> Result<()> {
         s.cyan.apply_to("Workspace Directory:"),
         config.workspace_dir
     );
-    println!(
-        "  {}  {}",
-        s.cyan.apply_to("IDE:"),
-        config.ide
-    );
+    println!("  {}  {}", s.cyan.apply_to("IDE:"), config.ide);
     println!();
     println!("  {}", s.bold.apply_to("Git Defaults"));
     println!("  {}", s.dim.apply_to("───────────────────"));
-    println!(
-        "  {}  {}",
-        s.cyan.apply_to("Host:"),
-        config.git.host
-    );
+    println!("  {}  {}", s.cyan.apply_to("Host:"), config.git.host);
     println!(
         "  {}  {}",
         s.cyan.apply_to("Organization:"),
@@ -307,10 +299,7 @@ pub(crate) fn run_setup() -> Result<()> {
         .context("failed to read input")?;
 
     let ide_options: Vec<String> = Ide::ALL.iter().map(|ide| ide.to_string()).collect();
-    let ide_default = Ide::ALL
-        .iter()
-        .position(|&i| i == current.ide)
-        .unwrap_or(0);
+    let ide_default = Ide::ALL.iter().position(|&i| i == current.ide).unwrap_or(0);
 
     let ide_index = Select::new()
         .with_prompt(format!("  {}", s.bold.apply_to("Preferred IDE")))
@@ -339,10 +328,7 @@ pub(crate) fn run_setup() -> Result<()> {
         .interact_text()
         .context("failed to read input")?;
 
-    let protocol_options: Vec<String> = GitProtocol::ALL
-        .iter()
-        .map(|p| p.to_string())
-        .collect();
+    let protocol_options: Vec<String> = GitProtocol::ALL.iter().map(|p| p.to_string()).collect();
     let protocol_default = GitProtocol::ALL
         .iter()
         .position(|&p| p == current.git.protocol)
@@ -504,10 +490,7 @@ mod tests {
 
     #[test]
     fn git_protocol_serializes_to_lowercase() {
-        assert_eq!(
-            serde_json::to_string(&GitProtocol::Ssh).unwrap(),
-            "\"ssh\""
-        );
+        assert_eq!(serde_json::to_string(&GitProtocol::Ssh).unwrap(), "\"ssh\"");
         assert_eq!(
             serde_json::to_string(&GitProtocol::Https).unwrap(),
             "\"https\""

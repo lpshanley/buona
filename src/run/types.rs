@@ -192,22 +192,43 @@ mod tests {
 
     #[test]
     fn build_system_serializes_to_lowercase() {
-        assert_eq!(serde_json::to_string(&BuildSystem::Cargo).unwrap(), "\"cargo\"");
-        assert_eq!(serde_json::to_string(&BuildSystem::Gradle).unwrap(), "\"gradle\"");
+        assert_eq!(
+            serde_json::to_string(&BuildSystem::Cargo).unwrap(),
+            "\"cargo\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BuildSystem::Gradle).unwrap(),
+            "\"gradle\""
+        );
     }
 
     #[test]
     fn standard_command_parse_known() {
-        assert_eq!(StandardCommand::parse("install"), Some(StandardCommand::Install));
-        assert_eq!(StandardCommand::parse("build"), Some(StandardCommand::Build));
+        assert_eq!(
+            StandardCommand::parse("install"),
+            Some(StandardCommand::Install)
+        );
+        assert_eq!(
+            StandardCommand::parse("build"),
+            Some(StandardCommand::Build)
+        );
         assert_eq!(StandardCommand::parse("run"), Some(StandardCommand::Run));
         assert_eq!(StandardCommand::parse("test"), Some(StandardCommand::Test));
         assert_eq!(StandardCommand::parse("lint"), Some(StandardCommand::Lint));
         assert_eq!(StandardCommand::parse("fmt"), Some(StandardCommand::Fmt));
         assert_eq!(StandardCommand::parse("format"), Some(StandardCommand::Fmt));
-        assert_eq!(StandardCommand::parse("clean"), Some(StandardCommand::Clean));
-        assert_eq!(StandardCommand::parse("publish"), Some(StandardCommand::Publish));
-        assert_eq!(StandardCommand::parse("bench"), Some(StandardCommand::Bench));
+        assert_eq!(
+            StandardCommand::parse("clean"),
+            Some(StandardCommand::Clean)
+        );
+        assert_eq!(
+            StandardCommand::parse("publish"),
+            Some(StandardCommand::Publish)
+        );
+        assert_eq!(
+            StandardCommand::parse("bench"),
+            Some(StandardCommand::Bench)
+        );
         assert_eq!(StandardCommand::parse("doc"), Some(StandardCommand::Doc));
         assert_eq!(StandardCommand::parse("docs"), Some(StandardCommand::Doc));
         assert_eq!(StandardCommand::parse("dev"), Some(StandardCommand::Dev));

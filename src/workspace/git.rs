@@ -39,10 +39,7 @@ fn extract_package_name(url: &str) -> String {
 /// 1. Fully qualified URL (contains `://` or starts with `git@`)
 /// 2. Org/Package (contains exactly one `/`)
 /// 3. Direct package name (no `/`)
-pub(super) fn resolve_package_spec(
-    spec: &str,
-    git: &config::GitConfig,
-) -> Result<ResolvedPackage> {
+pub(super) fn resolve_package_spec(spec: &str, git: &config::GitConfig) -> Result<ResolvedPackage> {
     let url = if spec.contains("://") || spec.starts_with("git@") {
         // Fully qualified URL — use as-is
         spec.to_string()
@@ -183,8 +180,7 @@ mod tests {
     #[test]
     fn resolve_full_https_url() {
         let git = test_git_config();
-        let result =
-            resolve_package_spec("https://github.com/other/repo.git", &git).unwrap();
+        let result = resolve_package_spec("https://github.com/other/repo.git", &git).unwrap();
         assert_eq!(result.url, "https://github.com/other/repo.git");
         assert_eq!(result.name, "repo");
     }
@@ -192,8 +188,7 @@ mod tests {
     #[test]
     fn resolve_full_ssh_url() {
         let git = test_git_config();
-        let result =
-            resolve_package_spec("git@github.com:other/repo.git", &git).unwrap();
+        let result = resolve_package_spec("git@github.com:other/repo.git", &git).unwrap();
         assert_eq!(result.url, "git@github.com:other/repo.git");
         assert_eq!(result.name, "repo");
     }
@@ -202,8 +197,7 @@ mod tests {
     fn resolve_full_url_ignores_config_org() {
         let mut git = test_git_config();
         git.organization = String::new(); // no org configured
-        let result =
-            resolve_package_spec("https://github.com/other/repo.git", &git).unwrap();
+        let result = resolve_package_spec("https://github.com/other/repo.git", &git).unwrap();
         assert_eq!(result.url, "https://github.com/other/repo.git");
         assert_eq!(result.name, "repo");
     }

@@ -144,10 +144,7 @@ mod tests {
 
         let test = &config.commands["test"];
         assert!(test.system.is_none());
-        assert_eq!(
-            test.exec.as_ref().unwrap(),
-            &["pnpm", "run", "custom-test"]
-        );
+        assert_eq!(test.exec.as_ref().unwrap(), &["pnpm", "run", "custom-test"]);
     }
 
     #[test]
@@ -220,11 +217,7 @@ mod tests {
     #[test]
     fn load_malformed_config_returns_error() {
         let dir = TempDir::new().unwrap();
-        fs::write(
-            dir.path().join(PACKAGE_CONFIG_FILE),
-            "not valid json {{{",
-        )
-        .unwrap();
+        fs::write(dir.path().join(PACKAGE_CONFIG_FILE), "not valid json {{{").unwrap();
 
         let result = load_package_config(dir.path());
         assert!(result.is_err());

@@ -5,6 +5,7 @@ mod detect;
 mod error;
 mod hooks;
 mod ops;
+mod output;
 mod resolve;
 mod systems;
 mod types;

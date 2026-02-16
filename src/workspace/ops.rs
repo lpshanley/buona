@@ -13,7 +13,8 @@ use crate::config::GitTracking;
 use crate::styles::Styles;
 
 use super::git::resolve_package_spec;
-use super::types::{WorkspaceMeta, WORKSPACE_FILE, read_meta, write_meta};
+use super::git_ops;
+use super::types::{WORKSPACE_FILE, WorkspaceMeta, read_meta, write_meta};
 use super::vscode::{VscodeWorkspace, VscodeWorkspaceFolder, sanitize_name};
 
 /// Resolve the effective git tracking mode for a workspace.
@@ -80,6 +81,17 @@ fn find_workspace_from_cwd() -> Result<PathBuf> {
     find_workspace_root(&cwd)
 }
 
+/// Resolve workspace root from an optional workspace selector.
+///
+/// If a selector is provided, lookup by name/directory. Otherwise, detect from
+/// current working directory.
+fn resolve_workspace_target(workspace: Option<&str>) -> Result<PathBuf> {
+    match workspace {
+        Some(name) => find_workspace(name),
+        None => find_workspace_from_cwd(),
+    }
+}
+
 /// Scan the `src/` directory of a workspace and return sorted package names.
 ///
 /// Each subdirectory of `src/` is treated as a package. Returns an empty vec
@@ -107,16 +119,7 @@ fn list_packages(ws_root: &Path) -> Result<Vec<String>> {
 /// Returns the URL string on success, or an empty string if the directory is
 /// not a git repo or has no `origin` remote.
 fn detect_git_remote_url(dir: &Path) -> String {
-    Command::new("git")
-        .args(["-C", &dir.to_string_lossy(), "remote", "get-url", "origin"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| {
-            let url = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if url.is_empty() { None } else { Some(url) }
-        })
-        .unwrap_or_default()
+    git_ops::detect_remote_url(dir)
 }
 
 /// Detect the current git branch for a directory.
@@ -124,17 +127,7 @@ fn detect_git_remote_url(dir: &Path) -> String {
 /// Returns the branch name on success, or an empty string if the directory is
 /// not a git repo or HEAD is detached.
 fn detect_git_branch(dir: &Path) -> String {
-    Command::new("git")
-        .args(["-C", &dir.to_string_lossy(), "rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| {
-            let branch = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            // "HEAD" is returned when in detached state
-            if branch.is_empty() || branch == "HEAD" { None } else { Some(branch) }
-        })
-        .unwrap_or_default()
+    git_ops::detect_branch(dir)
 }
 
 /// List all workspaces (directories) found in the configured workspace directory.
@@ -267,11 +260,7 @@ pub(crate) fn create(
     let tracking = resolve_git_tracking(&meta, &cfg);
 
     if tracking == GitTracking::Workspace {
-        let output = Command::new("git")
-            .arg("init")
-            .current_dir(&target)
-            .output()
-            .context("failed to execute git init — is git installed?")?;
+        let output = git_ops::init_repo(&target)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -406,12 +395,7 @@ fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> 
             s.cyan.apply_to(&resolved.name)
         );
 
-        let output = Command::new("git")
-            .arg("clone")
-            .arg(&resolved.url)
-            .arg(&dest)
-            .output()
-            .context("failed to execute git clone — is git installed?")?;
+        let output = git_ops::clone_into(&resolved.url, &dest)?;
 
         if output.status.success() {
             // If workspace-level tracking, remove the package's .git directory
@@ -449,7 +433,12 @@ fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> 
     // Print summary
     println!();
     if !failures.is_empty() {
-        println!("  {} added, {} failed", successes.len(), failures.len());
+        println!(
+            "  {} Summary: {} succeeded, {} failed",
+            s.dim.apply_to("→"),
+            successes.len(),
+            failures.len()
+        );
     } else {
         println!(
             "  {} {} package{} added",
@@ -521,11 +510,7 @@ fn open_workspace_at(ws_root: &Path) -> Result<()> {
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
 pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
-    // Resolve the workspace root
-    let ws_root = match workspace {
-        Some(name) => find_workspace(name)?,
-        None => find_workspace_from_cwd()?,
-    };
+    let ws_root = resolve_workspace_target(workspace)?;
 
     add_packages_to_workspace(&ws_root, packages)
 }
@@ -537,14 +522,14 @@ pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
-pub(crate) fn remove_packages(packages: &[String], workspace: Option<&str>, force: bool) -> Result<()> {
+pub(crate) fn remove_packages(
+    packages: &[String],
+    workspace: Option<&str>,
+    force: bool,
+) -> Result<()> {
     let s = Styles::default();
 
-    // Resolve the workspace root
-    let ws_root = match workspace {
-        Some(name) => find_workspace(name)?,
-        None => find_workspace_from_cwd()?,
-    };
+    let ws_root = resolve_workspace_target(workspace)?;
 
     let meta = read_meta(&ws_root)?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
@@ -670,7 +655,8 @@ pub(crate) fn remove_packages(packages: &[String], workspace: Option<&str>, forc
 
     if !dir_errors.is_empty() {
         println!(
-            "  {} removed, {} failed",
+            "  {} Summary: {} succeeded, {} failed",
+            s.dim.apply_to("→"),
             removed.len(),
             dir_errors.len()
         );
@@ -742,14 +728,14 @@ fn sync_workspace_file(ws_root: &Path, meta: &WorkspaceMeta) -> Result<PathBuf> 
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
-pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: bool) -> Result<PathBuf> {
+pub(crate) fn sync(
+    packages: &[String],
+    workspace: Option<&str>,
+    fetch_only: bool,
+) -> Result<PathBuf> {
     let s = Styles::default();
 
-    // Resolve the workspace root
-    let ws_root = match workspace {
-        Some(name) => find_workspace(name)?,
-        None => find_workspace_from_cwd()?,
-    };
+    let ws_root = resolve_workspace_target(workspace)?;
 
     let meta = read_meta(&ws_root)?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
@@ -782,7 +768,6 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
             );
         }
 
-        let git_arg = if fetch_only { "fetch" } else { "pull" };
         let git_op = if fetch_only { "Fetching" } else { "Pulling" };
 
         println!(
@@ -791,17 +776,10 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
             git_op,
         );
 
-        let output = Command::new("git")
-            .arg(git_arg)
-            .current_dir(&ws_root)
-            .output()
-            .with_context(|| format!("failed to execute git {git_arg} — is git installed?"))?;
+        let output = git_ops::sync_repo(&ws_root, fetch_only)?;
 
         if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let fallback = if fetch_only { "done" } else { "up to date" };
-            let summary = stdout.lines().next().unwrap_or(fallback).trim();
-            let summary = if summary.is_empty() { fallback } else { summary };
+            let summary = git_ops::summarize_sync_stdout(&output, fetch_only);
             println!(
                 "  {} {} — {}",
                 s.green.apply_to("✔"),
@@ -809,6 +787,7 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
                 s.dim.apply_to(summary)
             );
         } else {
+            let git_arg = if fetch_only { "fetch" } else { "pull" };
             let stderr = String::from_utf8_lossy(&output.stderr);
             bail!("git {} failed: {}", git_arg, stderr.trim());
         }
@@ -857,18 +836,10 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
                 s.cyan.apply_to(pkg_name)
             );
 
-            let git_arg = if fetch_only { "fetch" } else { "pull" };
-            let output = Command::new("git")
-                .arg(git_arg)
-                .current_dir(&pkg_dir)
-                .output()
-                .with_context(|| format!("failed to execute git {git_arg} — is git installed?"))?;
+            let output = git_ops::sync_repo(&pkg_dir, fetch_only)?;
 
             if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let fallback = if fetch_only { "done" } else { "up to date" };
-                let summary = stdout.lines().next().unwrap_or(fallback).trim();
-                let summary = if summary.is_empty() { fallback } else { summary };
+                let summary = git_ops::summarize_sync_stdout(&output, fetch_only);
                 println!(
                     "  {} {} — {}",
                     s.green.apply_to("✔"),
@@ -885,10 +856,14 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
         }
 
         // Print package-level summary
-        let verb = if fetch_only { "fetched" } else { "pulled" };
         println!();
         if !failures.is_empty() {
-            println!("  {} {verb}, {} failed", pulled.len(), failures.len());
+            println!(
+                "  {} Summary: {} succeeded, {} failed",
+                s.dim.apply_to("→"),
+                pulled.len(),
+                failures.len()
+            );
         } else if !targets.is_empty() {
             println!(
                 "  {} {} package{} synced",
@@ -926,11 +901,7 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
 pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
     let s = Styles::default();
 
-    // Resolve the workspace root
-    let ws_root = match workspace {
-        Some(name) => find_workspace(name)?,
-        None => find_workspace_from_cwd()?,
-    };
+    let ws_root = resolve_workspace_target(workspace)?;
 
     let meta = read_meta(&ws_root)?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
@@ -973,8 +944,16 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
         if tracking == GitTracking::Workspace {
             let ws_url = detect_git_remote_url(&ws_root);
             let ws_branch = detect_git_branch(&ws_root);
-            output["git_url"] = if ws_url.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(ws_url) };
-            output["git_branch"] = if ws_branch.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(ws_branch) };
+            output["git_url"] = if ws_url.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(ws_url)
+            };
+            output["git_branch"] = if ws_branch.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(ws_branch)
+            };
         }
 
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -994,11 +973,7 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
         s.cyan.apply_to("Name:"),
         s.bold.apply_to(&meta.name)
     );
-    println!(
-        "  {}  {}",
-        s.cyan.apply_to("Directory:"),
-        ws_root.display()
-    );
+    println!("  {}  {}", s.cyan.apply_to("Directory:"), ws_root.display());
     println!(
         "  {}  {} {}",
         s.cyan.apply_to("Workspace file:"),
@@ -1009,16 +984,8 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
             s.dim.apply_to("(not generated)").to_string()
         }
     );
-    println!(
-        "  {}  {}",
-        s.cyan.apply_to("Git tracking:"),
-        tracking
-    );
-    println!(
-        "  {}  {}",
-        s.cyan.apply_to("Packages:"),
-        pkg_names.len()
-    );
+    println!("  {}  {}", s.cyan.apply_to("Git tracking:"), tracking);
+    println!("  {}  {}", s.cyan.apply_to("Packages:"), pkg_names.len());
 
     // In workspace mode, show workspace-level git info
     if tracking == GitTracking::Workspace {
@@ -1029,11 +996,7 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
         println!("  {}", s.bold.apply_to("Workspace Git"));
         println!("  {}", s.dim.apply_to("──────────────"));
         if !ws_url.is_empty() {
-            println!(
-                "  {}  {}",
-                s.dim.apply_to("url:"),
-                s.dim.apply_to(&ws_url)
-            );
+            println!("  {}  {}", s.dim.apply_to("url:"), s.dim.apply_to(&ws_url));
         }
         if !ws_branch.is_empty() {
             println!(
@@ -1052,11 +1015,7 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
         for name in &pkg_names {
             let pkg_dir = src_dir.join(name);
 
-            println!(
-                "  {}  {}",
-                s.cyan.apply_to("•"),
-                s.bold.apply_to(name),
-            );
+            println!("  {}  {}", s.cyan.apply_to("•"), s.bold.apply_to(name),);
 
             // In package mode, show per-package git info
             if tracking == GitTracking::Package {
@@ -1064,11 +1023,7 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
                 let branch = detect_git_branch(&pkg_dir);
 
                 if !url.is_empty() {
-                    println!(
-                        "     {}  {}",
-                        s.dim.apply_to("url:"),
-                        s.dim.apply_to(&url)
-                    );
+                    println!("     {}  {}", s.dim.apply_to("url:"), s.dim.apply_to(&url));
                 }
                 if !branch.is_empty() {
                     println!(
@@ -1097,11 +1052,7 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
 pub(crate) fn open(workspace: Option<&str>) -> Result<()> {
-    // Resolve the workspace root
-    let ws_root = match workspace {
-        Some(name) => find_workspace(name)?,
-        None => find_workspace_from_cwd()?,
-    };
+    let ws_root = resolve_workspace_target(workspace)?;
 
     open_workspace_at(&ws_root)
 }
@@ -1122,11 +1073,7 @@ pub(crate) fn adopt(
 ) -> Result<()> {
     let s = Styles::default();
 
-    // Resolve the workspace root
-    let ws_root = match workspace {
-        Some(name) => find_workspace(name)?,
-        None => find_workspace_from_cwd()?,
-    };
+    let ws_root = resolve_workspace_target(workspace)?;
 
     let meta = read_meta(&ws_root)?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
@@ -1275,11 +1222,7 @@ pub(crate) fn adopt(
         s.green.apply_to("✔"),
         s.bold.apply_to(&pkg_name)
     );
-    println!(
-        "  {}  {}",
-        s.dim.apply_to("Location:"),
-        dest.display()
-    );
+    println!("  {}  {}", s.dim.apply_to("Location:"), dest.display());
     println!();
 
     Ok(())
@@ -1443,7 +1386,15 @@ mod tests {
             .output()
             .unwrap();
         std::process::Command::new("git")
-            .args(["-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "init"])
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@test.com",
+                "commit",
+                "-m",
+                "init",
+            ])
             .current_dir(&repo)
             .output()
             .unwrap();
@@ -1767,12 +1718,19 @@ mod tests {
         // Call open_workspace_at - this should create the .code-workspace file
         // Note: This will fail to actually launch the editor in tests,
         // but we can't easily mock that. We'll test that the file was generated.
-        let result = sync_workspace_file(ws_dir.path(), &read_meta(ws_dir.path()).unwrap().unwrap());
+        let result =
+            sync_workspace_file(ws_dir.path(), &read_meta(ws_dir.path()).unwrap().unwrap());
         assert!(result.is_ok());
 
         let ws_file = result.unwrap();
         assert!(ws_file.exists());
-        assert!(ws_file.file_name().unwrap().to_string_lossy().contains("my-workspace"));
+        assert!(
+            ws_file
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("my-workspace")
+        );
 
         // Verify file contents
         let contents = fs::read_to_string(&ws_file).unwrap();

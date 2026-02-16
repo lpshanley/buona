@@ -179,22 +179,48 @@ pub(super) fn standard_mapping(
         (BuildSystem::Just, _) => return None,
 
         // ── gradle ───────────────────────────────────
-        (BuildSystem::Gradle, StandardCommand::Build) => return Some(gradle_mapping("build", extra_args, package_dir)),
-        (BuildSystem::Gradle, StandardCommand::Test) => return Some(gradle_mapping("test", extra_args, package_dir)),
-        (BuildSystem::Gradle, StandardCommand::Clean) => return Some(gradle_mapping("clean", extra_args, package_dir)),
-        (BuildSystem::Gradle, StandardCommand::Install) => return Some(gradle_mapping("assemble", extra_args, package_dir)),
-        (BuildSystem::Gradle, StandardCommand::Lint) => return Some(gradle_mapping("check", extra_args, package_dir)),
-        (BuildSystem::Gradle, StandardCommand::Publish) => return Some(gradle_mapping("publish", extra_args, package_dir)),
-        (BuildSystem::Gradle, StandardCommand::Doc) => return Some(gradle_mapping("javadoc", extra_args, package_dir)),
+        (BuildSystem::Gradle, StandardCommand::Build) => {
+            return Some(gradle_mapping("build", extra_args, package_dir));
+        }
+        (BuildSystem::Gradle, StandardCommand::Test) => {
+            return Some(gradle_mapping("test", extra_args, package_dir));
+        }
+        (BuildSystem::Gradle, StandardCommand::Clean) => {
+            return Some(gradle_mapping("clean", extra_args, package_dir));
+        }
+        (BuildSystem::Gradle, StandardCommand::Install) => {
+            return Some(gradle_mapping("assemble", extra_args, package_dir));
+        }
+        (BuildSystem::Gradle, StandardCommand::Lint) => {
+            return Some(gradle_mapping("check", extra_args, package_dir));
+        }
+        (BuildSystem::Gradle, StandardCommand::Publish) => {
+            return Some(gradle_mapping("publish", extra_args, package_dir));
+        }
+        (BuildSystem::Gradle, StandardCommand::Doc) => {
+            return Some(gradle_mapping("javadoc", extra_args, package_dir));
+        }
         (BuildSystem::Gradle, _) => return None,
 
         // ── maven ────────────────────────────────────
-        (BuildSystem::Maven, StandardCommand::Build) => return Some(maven_mapping("compile", extra_args, package_dir)),
-        (BuildSystem::Maven, StandardCommand::Test) => return Some(maven_mapping("test", extra_args, package_dir)),
-        (BuildSystem::Maven, StandardCommand::Clean) => return Some(maven_mapping("clean", extra_args, package_dir)),
-        (BuildSystem::Maven, StandardCommand::Install) => return Some(maven_mapping("install", extra_args, package_dir)),
-        (BuildSystem::Maven, StandardCommand::Publish) => return Some(maven_mapping("deploy", extra_args, package_dir)),
-        (BuildSystem::Maven, StandardCommand::Doc) => return Some(maven_mapping("javadoc:javadoc", extra_args, package_dir)),
+        (BuildSystem::Maven, StandardCommand::Build) => {
+            return Some(maven_mapping("compile", extra_args, package_dir));
+        }
+        (BuildSystem::Maven, StandardCommand::Test) => {
+            return Some(maven_mapping("test", extra_args, package_dir));
+        }
+        (BuildSystem::Maven, StandardCommand::Clean) => {
+            return Some(maven_mapping("clean", extra_args, package_dir));
+        }
+        (BuildSystem::Maven, StandardCommand::Install) => {
+            return Some(maven_mapping("install", extra_args, package_dir));
+        }
+        (BuildSystem::Maven, StandardCommand::Publish) => {
+            return Some(maven_mapping("deploy", extra_args, package_dir));
+        }
+        (BuildSystem::Maven, StandardCommand::Doc) => {
+            return Some(maven_mapping("javadoc:javadoc", extra_args, package_dir));
+        }
         (BuildSystem::Maven, _) => return None,
     };
 
@@ -340,13 +366,8 @@ mod tests {
 
     #[test]
     fn cargo_test_mapping() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Cargo,
-            StandardCommand::Test,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Cargo, StandardCommand::Test, &[], None).unwrap();
         assert_eq!(prog, "cargo");
         assert_eq!(args, vec!["test"]);
     }
@@ -354,140 +375,85 @@ mod tests {
     #[test]
     fn cargo_test_with_extra_args() {
         let extra = vec!["--nocapture".to_string()];
-        let (prog, args) = standard_mapping(
-            BuildSystem::Cargo,
-            StandardCommand::Test,
-            &extra,
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Cargo, StandardCommand::Test, &extra, None).unwrap();
         assert_eq!(prog, "cargo");
         assert_eq!(args, vec!["test", "--", "--nocapture"]);
     }
 
     #[test]
     fn cargo_lint_maps_to_clippy() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Cargo,
-            StandardCommand::Lint,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Cargo, StandardCommand::Lint, &[], None).unwrap();
         assert_eq!(prog, "cargo");
         assert_eq!(args, vec!["clippy"]);
     }
 
     #[test]
     fn cargo_dev_returns_none() {
-        let result = standard_mapping(
-            BuildSystem::Cargo,
-            StandardCommand::Dev,
-            &[],
-            None,
-        );
+        let result = standard_mapping(BuildSystem::Cargo, StandardCommand::Dev, &[], None);
         assert!(result.is_none());
     }
 
     #[test]
     fn npm_build_uses_run() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Npm,
-            StandardCommand::Build,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Npm, StandardCommand::Build, &[], None).unwrap();
         assert_eq!(prog, "npm");
         assert_eq!(args, vec!["run", "build"]);
     }
 
     #[test]
     fn npm_install_is_direct() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Npm,
-            StandardCommand::Install,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Npm, StandardCommand::Install, &[], None).unwrap();
         assert_eq!(prog, "npm");
         assert_eq!(args, vec!["install"]);
     }
 
     #[test]
     fn pnpm_test_is_direct() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Pnpm,
-            StandardCommand::Test,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Pnpm, StandardCommand::Test, &[], None).unwrap();
         assert_eq!(prog, "pnpm");
         assert_eq!(args, vec!["test"]);
     }
 
     #[test]
     fn go_test_mapping() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Go,
-            StandardCommand::Test,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Go, StandardCommand::Test, &[], None).unwrap();
         assert_eq!(prog, "go");
         assert_eq!(args, vec!["test", "./..."]);
     }
 
     #[test]
     fn go_lint_uses_golangci() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Go,
-            StandardCommand::Lint,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Go, StandardCommand::Lint, &[], None).unwrap();
         assert_eq!(prog, "golangci-lint");
         assert_eq!(args, vec!["run"]);
     }
 
     #[test]
     fn uv_test_mapping() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Uv,
-            StandardCommand::Test,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Uv, StandardCommand::Test, &[], None).unwrap();
         assert_eq!(prog, "uv");
         assert_eq!(args, vec!["run", "pytest"]);
     }
 
     #[test]
     fn make_build_has_no_target() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Make,
-            StandardCommand::Build,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Make, StandardCommand::Build, &[], None).unwrap();
         assert_eq!(prog, "make");
         assert!(args.is_empty());
     }
 
     #[test]
     fn make_bench_returns_none() {
-        let result = standard_mapping(
-            BuildSystem::Make,
-            StandardCommand::Bench,
-            &[],
-            None,
-        );
+        let result = standard_mapping(BuildSystem::Make, StandardCommand::Bench, &[], None);
         assert!(result.is_none());
     }
 
@@ -495,64 +461,39 @@ mod tests {
 
     #[test]
     fn just_build_has_no_target() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Just,
-            StandardCommand::Build,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Just, StandardCommand::Build, &[], None).unwrap();
         assert_eq!(prog, "just");
         assert!(args.is_empty());
     }
 
     #[test]
     fn just_test_mapping() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Just,
-            StandardCommand::Test,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Just, StandardCommand::Test, &[], None).unwrap();
         assert_eq!(prog, "just");
         assert_eq!(args, vec!["test"]);
     }
 
     #[test]
     fn just_clean_mapping() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Just,
-            StandardCommand::Clean,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Just, StandardCommand::Clean, &[], None).unwrap();
         assert_eq!(prog, "just");
         assert_eq!(args, vec!["clean"]);
     }
 
     #[test]
     fn just_install_mapping() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Just,
-            StandardCommand::Install,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Just, StandardCommand::Install, &[], None).unwrap();
         assert_eq!(prog, "just");
         assert_eq!(args, vec!["install"]);
     }
 
     #[test]
     fn just_bench_returns_none() {
-        let result = standard_mapping(
-            BuildSystem::Just,
-            StandardCommand::Bench,
-            &[],
-            None,
-        );
+        let result = standard_mapping(BuildSystem::Just, StandardCommand::Bench, &[], None);
         assert!(result.is_none());
     }
 
@@ -560,13 +501,8 @@ mod tests {
 
     #[test]
     fn gradle_build_without_wrapper() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Gradle,
-            StandardCommand::Build,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Gradle, StandardCommand::Build, &[], None).unwrap();
         assert_eq!(prog, "gradle");
         assert_eq!(args, vec!["build"]);
     }
@@ -589,39 +525,24 @@ mod tests {
 
     #[test]
     fn gradle_test_mapping() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Gradle,
-            StandardCommand::Test,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Gradle, StandardCommand::Test, &[], None).unwrap();
         assert_eq!(prog, "gradle");
         assert_eq!(args, vec!["test"]);
     }
 
     #[test]
     fn gradle_install_maps_to_assemble() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Gradle,
-            StandardCommand::Install,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Gradle, StandardCommand::Install, &[], None).unwrap();
         assert_eq!(prog, "gradle");
         assert_eq!(args, vec!["assemble"]);
     }
 
     #[test]
     fn gradle_lint_maps_to_check() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Gradle,
-            StandardCommand::Lint,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Gradle, StandardCommand::Lint, &[], None).unwrap();
         assert_eq!(prog, "gradle");
         assert_eq!(args, vec!["check"]);
     }
@@ -630,13 +551,8 @@ mod tests {
 
     #[test]
     fn maven_build_without_wrapper() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Maven,
-            StandardCommand::Build,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Maven, StandardCommand::Build, &[], None).unwrap();
         assert_eq!(prog, "mvn");
         assert_eq!(args, vec!["compile"]);
     }
@@ -659,39 +575,24 @@ mod tests {
 
     #[test]
     fn maven_test_mapping() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Maven,
-            StandardCommand::Test,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Maven, StandardCommand::Test, &[], None).unwrap();
         assert_eq!(prog, "mvn");
         assert_eq!(args, vec!["test"]);
     }
 
     #[test]
     fn maven_publish_maps_to_deploy() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Maven,
-            StandardCommand::Publish,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Maven, StandardCommand::Publish, &[], None).unwrap();
         assert_eq!(prog, "mvn");
         assert_eq!(args, vec!["deploy"]);
     }
 
     #[test]
     fn maven_doc_maps_to_javadoc() {
-        let (prog, args) = standard_mapping(
-            BuildSystem::Maven,
-            StandardCommand::Doc,
-            &[],
-            None,
-        )
-        .unwrap();
+        let (prog, args) =
+            standard_mapping(BuildSystem::Maven, StandardCommand::Doc, &[], None).unwrap();
         assert_eq!(prog, "mvn");
         assert_eq!(args, vec!["javadoc:javadoc"]);
     }

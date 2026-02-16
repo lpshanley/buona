@@ -10,7 +10,12 @@ use std::path::Path;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "buona", version, about = "The Good CLI — making life easier when managing complex workspace and build tasks", arg_required_else_help = true)]
+#[command(
+    name = "buona",
+    version,
+    about = "The Good CLI — making life easier when managing complex workspace and build tasks",
+    arg_required_else_help = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -207,12 +212,24 @@ fn main() -> anyhow::Result<()> {
             WorkspaceCommands::List => {
                 workspace::list()?;
             }
-            WorkspaceCommands::Create { path, name, packages, open, git_tracking } => {
+            WorkspaceCommands::Create {
+                path,
+                name,
+                packages,
+                open,
+                git_tracking,
+            } => {
                 let tracking = git_tracking.map(|s| match s.as_str() {
                     "workspace" => config::GitTracking::Workspace,
                     _ => config::GitTracking::Package,
                 });
-                workspace::create(Path::new(&path), name.as_deref(), packages.as_deref(), open, tracking)?;
+                workspace::create(
+                    Path::new(&path),
+                    name.as_deref(),
+                    packages.as_deref(),
+                    open,
+                    tracking,
+                )?;
             }
             WorkspaceCommands::Delete { workspace, force } => {
                 workspace::delete(&workspace, force)?;
@@ -249,7 +266,12 @@ fn main() -> anyhow::Result<()> {
                 copy,
                 name,
             } => {
-                workspace::adopt(Path::new(&path), workspace.as_deref(), copy, name.as_deref())?;
+                workspace::adopt(
+                    Path::new(&path),
+                    workspace.as_deref(),
+                    copy,
+                    name.as_deref(),
+                )?;
             }
         },
         Commands::Detect => {
