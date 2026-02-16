@@ -39,20 +39,20 @@ pub(super) fn refine_python_system(pyproject_content: &str) -> BuildSystem {
 
 /// Detect the gradle program to use, preferring `./gradlew` if present.
 fn detect_gradle_program(dir: Option<&Path>) -> String {
-    if let Some(d) = dir {
-        if d.join("gradlew").exists() {
-            return "./gradlew".to_string();
-        }
+    if let Some(d) = dir
+        && d.join("gradlew").exists()
+    {
+        return "./gradlew".to_string();
     }
     "gradle".to_string()
 }
 
 /// Detect the maven program to use, preferring `./mvnw` if present.
 fn detect_maven_program(dir: Option<&Path>) -> String {
-    if let Some(d) = dir {
-        if d.join("mvnw").exists() {
-            return "./mvnw".to_string();
-        }
+    if let Some(d) = dir
+        && d.join("mvnw").exists()
+    {
+        return "./mvnw".to_string();
     }
     "mvn".to_string()
 }

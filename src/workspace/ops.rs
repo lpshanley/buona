@@ -622,17 +622,17 @@ pub(crate) fn remove_packages(
     for &name in &to_remove {
         let pkg_dir = src_dir.join(name);
 
-        if pkg_dir.exists() {
-            if let Err(e) = fs::remove_dir_all(&pkg_dir) {
-                dir_errors.push((name.to_string(), format!("{e}")));
-                println!(
-                    "  {} {} — could not remove directory: {}",
-                    s.red.apply_to("✘"),
-                    name,
-                    e
-                );
-                continue;
-            }
+        if pkg_dir.exists()
+            && let Err(e) = fs::remove_dir_all(&pkg_dir)
+        {
+            dir_errors.push((name.to_string(), format!("{e}")));
+            println!(
+                "  {} {} — could not remove directory: {}",
+                s.red.apply_to("✘"),
+                name,
+                e
+            );
+            continue;
         }
 
         removed.push(name.to_string());

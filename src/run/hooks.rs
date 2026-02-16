@@ -245,21 +245,20 @@ fn resolve_hook_value(
                 let command = strip_hook_prefix(hook_name);
 
                 // Try standard mapping first
-                if let Some(std_cmd) = StandardCommand::parse(&command) {
-                    if let Some((program, args)) =
+                if let Some(std_cmd) = StandardCommand::parse(&command)
+                    && let Some((program, args)) =
                         standard_mapping(system, std_cmd, &[], Some(package_dir))
-                    {
-                        let display = format_display(&program, &args);
-                        return Ok(ResolvedHook {
-                            phase,
-                            name: hook_name.to_string(),
-                            source,
-                            program,
-                            args,
-                            cwd: package_dir.to_path_buf(),
-                            display,
-                        });
-                    }
+                {
+                    let display = format_display(&program, &args);
+                    return Ok(ResolvedHook {
+                        phase,
+                        name: hook_name.to_string(),
+                        source,
+                        program,
+                        args,
+                        cwd: package_dir.to_path_buf(),
+                        display,
+                    });
                 }
 
                 // Fall back to proxy command

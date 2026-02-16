@@ -21,10 +21,10 @@ pub(super) fn detect_build_system(dir: &Path) -> Option<BuildSystem> {
     for &(marker, system) in marker_files() {
         if dir.join(marker).exists() {
             // pyproject.toml could be uv or poetry — refine by inspecting content
-            if marker == "pyproject.toml" {
-                if let Ok(content) = fs::read_to_string(dir.join(marker)) {
-                    return Some(refine_python_system(&content));
-                }
+            if marker == "pyproject.toml"
+                && let Ok(content) = fs::read_to_string(dir.join(marker))
+            {
+                return Some(refine_python_system(&content));
             }
             return Some(system);
         }

@@ -210,12 +210,12 @@ fn execute_recursive(options: &RunOptions, ws_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    if let Some(ref hooks) = ws_plan.hooks {
-        if let Some(ref pre) = hooks.pre_hook {
-            let status = execute_hook(pre)?;
-            if !status.success() {
-                std::process::exit(status.code().unwrap_or(1));
-            }
+    if let Some(ref hooks) = ws_plan.hooks
+        && let Some(ref pre) = hooks.pre_hook
+    {
+        let status = execute_hook(pre)?;
+        if !status.success() {
+            std::process::exit(status.code().unwrap_or(1));
         }
     }
 
@@ -225,12 +225,12 @@ fn execute_recursive(options: &RunOptions, ws_root: &Path) -> Result<()> {
         execute_with_hooks(&pkg.plan, pkg.hooks.clone())?;
     }
 
-    if let Some(ref hooks) = ws_plan.hooks {
-        if let Some(ref post) = hooks.post_hook {
-            let status = execute_hook(post)?;
-            if !status.success() {
-                std::process::exit(status.code().unwrap_or(1));
-            }
+    if let Some(ref hooks) = ws_plan.hooks
+        && let Some(ref post) = hooks.post_hook
+    {
+        let status = execute_hook(post)?;
+        if !status.success() {
+            std::process::exit(status.code().unwrap_or(1));
         }
     }
 

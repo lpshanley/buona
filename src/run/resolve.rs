@@ -33,40 +33,39 @@ pub(super) fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, RunErr
     let command_name = &input.command;
 
     // 1. Check for exec override in buona.json commands
-    if let Some(ref config) = input.package_config {
-        if let Some(cmd_config) = config.commands.get(command_name) {
-            if let Some(ref exec) = cmd_config.exec {
-                if exec.is_empty() {
-                    return Err(RunError::ConfigError(format!(
-                        "\"exec\" for command \"{command_name}\" in buona.json is empty"
-                    )));
-                }
-                let program = exec[0].clone();
-                let mut args: Vec<String> = exec[1..].to_vec();
-                args.extend(input.extra_args.iter().cloned());
-
-                // Resolve system for display (best-effort)
-                let system = resolve_effective_system(
-                    cmd_config.system,
-                    input.package_config.as_ref(),
-                    input.cli_system.as_deref(),
-                    &input.package_dir,
-                )
-                .ok()
-                .flatten();
-
-                let display = format_display(&program, &args);
-                return Ok(ExecutionPlan {
-                    cwd: input.package_dir.clone(),
-                    system,
-                    kind: PlanKind::ExecOverride,
-                    program: Some(program),
-                    args,
-                    display,
-                    skip_reason: None,
-                });
-            }
+    if let Some(ref config) = input.package_config
+        && let Some(cmd_config) = config.commands.get(command_name)
+        && let Some(ref exec) = cmd_config.exec
+    {
+        if exec.is_empty() {
+            return Err(RunError::ConfigError(format!(
+                "\"exec\" for command \"{command_name}\" in buona.json is empty"
+            )));
         }
+        let program = exec[0].clone();
+        let mut args: Vec<String> = exec[1..].to_vec();
+        args.extend(input.extra_args.iter().cloned());
+
+        // Resolve system for display (best-effort)
+        let system = resolve_effective_system(
+            cmd_config.system,
+            input.package_config.as_ref(),
+            input.cli_system.as_deref(),
+            &input.package_dir,
+        )
+        .ok()
+        .flatten();
+
+        let display = format_display(&program, &args);
+        return Ok(ExecutionPlan {
+            cwd: input.package_dir.clone(),
+            system,
+            kind: PlanKind::ExecOverride,
+            program: Some(program),
+            args,
+            display,
+            skip_reason: None,
+        });
     }
 
     // 2. Determine effective build system via precedence chain
@@ -153,17 +152,17 @@ fn resolve_effective_system(
     }
 
     // 2. Global system in buona.json (if not "auto")
-    if let Some(config) = package_config {
-        if config.system != "auto" {
-            return parse_system_name(&config.system).map(Some);
-        }
+    if let Some(config) = package_config
+        && config.system != "auto"
+    {
+        return parse_system_name(&config.system).map(Some);
     }
 
     // 3. CLI --system
-    if let Some(name) = cli_system {
-        if name != "auto" {
-            return parse_system_name(name).map(Some);
-        }
+    if let Some(name) = cli_system
+        && name != "auto"
+    {
+        return parse_system_name(name).map(Some);
     }
 
     // 4. Auto-detect

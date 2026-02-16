@@ -2,6 +2,7 @@
   "system": "just",
   "$schema": "./schemas/buona.schema.json",
   "commands": {
-    "format:all": { "exec": ["cargo", "fmt", "--all"] }
+    "format:all": { "exec": ["cargo", "fmt", "--all"] },
+    "clippy:all": { "exec": ["cargo", "clippy", "--all-targets", "--all-features", "--", "-D", "warnings"] }
   }
 }
