@@ -92,6 +92,10 @@ enum WorkspaceCommands {
         /// Open the workspace in the configured editor after creation
         #[arg(long)]
         open: bool,
+
+        /// Git tracking mode for this workspace (overrides global default)
+        #[arg(long, value_parser = ["package", "workspace"])]
+        git_tracking: Option<String>,
     },
 
     /// Delete a workspace
@@ -203,8 +207,12 @@ fn main() -> anyhow::Result<()> {
             WorkspaceCommands::List => {
                 workspace::list()?;
             }
-            WorkspaceCommands::Create { path, name, packages, open } => {
-                workspace::create(Path::new(&path), name.as_deref(), packages.as_deref(), open)?;
+            WorkspaceCommands::Create { path, name, packages, open, git_tracking } => {
+                let tracking = git_tracking.map(|s| match s.as_str() {
+                    "workspace" => config::GitTracking::Workspace,
+                    _ => config::GitTracking::Package,
+                });
+                workspace::create(Path::new(&path), name.as_deref(), packages.as_deref(), open, tracking)?;
             }
             WorkspaceCommands::Delete { workspace, force } => {
                 workspace::delete(&workspace, force)?;

@@ -68,6 +68,7 @@ pub(super) fn resolve_package_spec(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::GitTracking;
 
     // ── extract_package_name tests ───────────────────────────────────
 
@@ -133,6 +134,7 @@ mod tests {
             host: "github.com".to_string(),
             organization: "myorg".to_string(),
             protocol: GitProtocol::Ssh,
+            tracking: GitTracking::default(),
         }
     }
 

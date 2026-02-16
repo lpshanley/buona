@@ -41,6 +41,12 @@
           "description": "The protocol used to clone and push.",
           "enum": ["ssh", "https"],
           "default": "ssh"
+        },
+        "tracking": {
+          "type": "string",
+          "description": "Default git tracking mode for workspaces. \"package\" means each package has its own .git. \"workspace\" means a single .git at the workspace root.",
+          "enum": ["package", "workspace"],
+          "default": "package"
         }
       }
     }

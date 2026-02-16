@@ -6,11 +6,18 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::config::GitTracking;
+
 pub(super) const WORKSPACE_FILE: &str = "buona.workspace.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct WorkspaceMeta {
     pub(crate) name: String,
+
+    /// Optional per-workspace git tracking mode override.
+    /// When `None`, falls back to the global config default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) git_tracking: Option<GitTracking>,
 }
 
 /// Read workspace metadata from a directory, if a `buona.workspace.json` exists.
@@ -49,10 +56,12 @@ mod tests {
     fn workspace_meta_round_trips_through_serde() {
         let meta = WorkspaceMeta {
             name: "my-project".to_string(),
+            git_tracking: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
         let deserialized: WorkspaceMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.name, "my-project");
+        assert_eq!(deserialized.git_tracking, None);
     }
 
     #[test]
@@ -62,6 +71,28 @@ mod tests {
         let json = r#"{"name": "old-workspace", "packages": [{"name": "pkg", "url": "x"}]}"#;
         let meta: WorkspaceMeta = serde_json::from_str(json).unwrap();
         assert_eq!(meta.name, "old-workspace");
+        assert_eq!(meta.git_tracking, None);
+    }
+
+    #[test]
+    fn workspace_meta_with_git_tracking_round_trips() {
+        let meta = WorkspaceMeta {
+            name: "mono".to_string(),
+            git_tracking: Some(GitTracking::Workspace),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let deserialized: WorkspaceMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.git_tracking, Some(GitTracking::Workspace));
+    }
+
+    #[test]
+    fn workspace_meta_none_tracking_omitted_in_json() {
+        let meta = WorkspaceMeta {
+            name: "test".to_string(),
+            git_tracking: None,
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(!json.contains("git_tracking"));
     }
 
     #[test]
@@ -69,6 +100,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let meta = WorkspaceMeta {
             name: "test-workspace".to_string(),
+            git_tracking: None,
         };
         let json = serde_json::to_string_pretty(&meta).unwrap();
         fs::write(dir.path().join(WORKSPACE_FILE), json).unwrap();
@@ -90,6 +122,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let meta = WorkspaceMeta {
             name: "test".to_string(),
+            git_tracking: None,
         };
         write_meta(dir.path(), &meta).unwrap();
 

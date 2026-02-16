@@ -13,6 +13,11 @@
     "name": {
       "type": "string",
       "description": "The name of the workspace."
+    },
+    "git_tracking": {
+      "type": "string",
+      "description": "Override the git tracking mode for this workspace. When omitted, the global config default is used.",
+      "enum": ["package", "workspace"]
     }
   }
 }

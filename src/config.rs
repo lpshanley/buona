@@ -50,6 +50,31 @@ impl fmt::Display for Ide {
     }
 }
 
+/// Git tracking modes for workspaces.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum GitTracking {
+    /// Each package has its own .git directory (default).
+    #[default]
+    Package,
+    /// A single .git at the workspace root tracks everything.
+    Workspace,
+}
+
+impl GitTracking {
+    /// All variants in display order.
+    pub(crate) const ALL: [GitTracking; 2] = [GitTracking::Package, GitTracking::Workspace];
+}
+
+impl fmt::Display for GitTracking {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GitTracking::Package => write!(f, "Package-level"),
+            GitTracking::Workspace => write!(f, "Workspace-level"),
+        }
+    }
+}
+
 /// Supported git protocols.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -89,6 +114,10 @@ pub(crate) struct GitConfig {
     /// The protocol used to clone/push (SSH or HTTPS).
     #[serde(default)]
     pub(crate) protocol: GitProtocol,
+
+    /// Default git tracking mode for workspaces.
+    #[serde(default)]
+    pub(crate) tracking: GitTracking,
 }
 
 fn default_git_host() -> String {
@@ -101,6 +130,7 @@ impl Default for GitConfig {
             host: default_git_host(),
             organization: String::new(),
             protocol: GitProtocol::default(),
+            tracking: GitTracking::default(),
         }
     }
 }
@@ -226,6 +256,11 @@ pub(crate) fn print_pretty(config: &BuonaConfig) -> Result<()> {
         s.cyan.apply_to("Protocol:"),
         config.git.protocol
     );
+    println!(
+        "  {}  {}",
+        s.cyan.apply_to("Tracking:"),
+        config.git.tracking
+    );
     println!();
 
     if !file_exists {
@@ -322,6 +357,21 @@ pub(crate) fn run_setup() -> Result<()> {
 
     let git_protocol = GitProtocol::ALL[protocol_index];
 
+    let tracking_options: Vec<String> = GitTracking::ALL.iter().map(|t| t.to_string()).collect();
+    let tracking_default = GitTracking::ALL
+        .iter()
+        .position(|&t| t == current.git.tracking)
+        .unwrap_or(0);
+
+    let tracking_index = Select::new()
+        .with_prompt(format!("  {}", s.bold.apply_to("Git tracking mode")))
+        .items(&tracking_options)
+        .default(tracking_default)
+        .interact()
+        .context("failed to read input")?;
+
+    let git_tracking = GitTracking::ALL[tracking_index];
+
     let config = BuonaConfig {
         workspace_dir,
         ide,
@@ -329,6 +379,7 @@ pub(crate) fn run_setup() -> Result<()> {
             host: git_host,
             organization: git_org,
             protocol: git_protocol,
+            tracking: git_tracking,
         },
     };
 
@@ -488,6 +539,7 @@ mod tests {
             host: "git.example.com".to_string(),
             organization: "my-org".to_string(),
             protocol: GitProtocol::Https,
+            tracking: GitTracking::Package,
         };
         let json = serde_json::to_string(&git).unwrap();
         let deserialized: GitConfig = serde_json::from_str(&json).unwrap();
@@ -531,6 +583,7 @@ mod tests {
                 host: "github.example.com".to_string(),
                 organization: "engineering".to_string(),
                 protocol: GitProtocol::Https,
+                tracking: GitTracking::Workspace,
             },
         };
         let json = serde_json::to_string(&config).unwrap();
@@ -538,5 +591,51 @@ mod tests {
         assert_eq!(deserialized.git.host, "github.example.com");
         assert_eq!(deserialized.git.organization, "engineering");
         assert_eq!(deserialized.git.protocol, GitProtocol::Https);
+        assert_eq!(deserialized.git.tracking, GitTracking::Workspace);
+    }
+
+    // ── GitTracking tests ────────────────────────────────────────
+
+    #[test]
+    fn default_git_tracking_is_package() {
+        assert_eq!(GitTracking::default(), GitTracking::Package);
+    }
+
+    #[test]
+    fn git_tracking_display_package() {
+        assert_eq!(GitTracking::Package.to_string(), "Package-level");
+    }
+
+    #[test]
+    fn git_tracking_display_workspace() {
+        assert_eq!(GitTracking::Workspace.to_string(), "Workspace-level");
+    }
+
+    #[test]
+    fn git_tracking_serializes_to_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&GitTracking::Package).unwrap(),
+            "\"package\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GitTracking::Workspace).unwrap(),
+            "\"workspace\""
+        );
+    }
+
+    #[test]
+    fn git_tracking_deserializes_from_lowercase() {
+        let package: GitTracking = serde_json::from_str("\"package\"").unwrap();
+        assert_eq!(package, GitTracking::Package);
+
+        let workspace: GitTracking = serde_json::from_str("\"workspace\"").unwrap();
+        assert_eq!(workspace, GitTracking::Workspace);
+    }
+
+    #[test]
+    fn config_without_tracking_field_defaults_to_package() {
+        let json = r#"{"workspace_dir": "~/workspace", "git": {"host": "github.com"}}"#;
+        let config: BuonaConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.git.tracking, GitTracking::Package);
     }
 }

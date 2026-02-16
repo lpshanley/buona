@@ -9,11 +9,19 @@ use anyhow::{Context, Result, bail};
 use dialoguer::Confirm;
 
 use crate::config;
+use crate::config::GitTracking;
 use crate::styles::Styles;
 
 use super::git::resolve_package_spec;
 use super::types::{WorkspaceMeta, WORKSPACE_FILE, read_meta, write_meta};
 use super::vscode::{VscodeWorkspace, VscodeWorkspaceFolder, sanitize_name};
+
+/// Resolve the effective git tracking mode for a workspace.
+///
+/// Priority: workspace-level override > global config default > hardcoded Package.
+fn resolve_git_tracking(meta: &WorkspaceMeta, cfg: &config::BuonaConfig) -> GitTracking {
+    meta.git_tracking.unwrap_or(cfg.git.tracking)
+}
 
 /// Find a workspace by name or directory name. Returns the resolved path.
 fn find_workspace(query: &str) -> Result<PathBuf> {
@@ -210,6 +218,7 @@ pub(crate) fn create(
     name: Option<&str>,
     packages: Option<&[String]>,
     open_ws: bool,
+    git_tracking: Option<GitTracking>,
 ) -> Result<()> {
     let s = Styles::default();
 
@@ -247,8 +256,33 @@ pub(crate) fn create(
     })?;
 
     // Write the workspace metadata file
-    let meta = WorkspaceMeta { name: ws_name };
+    let meta = WorkspaceMeta {
+        name: ws_name,
+        git_tracking,
+    };
     write_meta(&target, &meta)?;
+
+    // Initialize git at workspace root if workspace-level tracking is active
+    let cfg = config::load_config()?;
+    let tracking = resolve_git_tracking(&meta, &cfg);
+
+    if tracking == GitTracking::Workspace {
+        let output = Command::new("git")
+            .arg("init")
+            .current_dir(&target)
+            .output()
+            .context("failed to execute git init — is git installed?")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("git init failed: {}", stderr.trim());
+        }
+
+        println!(
+            "  {} Initialized git repository at workspace root",
+            s.green.apply_to("✔"),
+        );
+    }
 
     // Auto-sync the .code-workspace file
     sync_workspace_file(&target, &meta)?;
@@ -330,6 +364,7 @@ fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> 
     let meta = read_meta(ws_root)?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
+    let tracking = resolve_git_tracking(&meta, &cfg);
     let src_dir = ws_root.join("src");
 
     println!();
@@ -379,6 +414,19 @@ fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> 
             .context("failed to execute git clone — is git installed?")?;
 
         if output.status.success() {
+            // If workspace-level tracking, remove the package's .git directory
+            if tracking == GitTracking::Workspace {
+                let pkg_git_dir = dest.join(".git");
+                if pkg_git_dir.exists() {
+                    fs::remove_dir_all(&pkg_git_dir).with_context(|| {
+                        format!(
+                            "could not remove .git directory from cloned package: {}",
+                            pkg_git_dir.display()
+                        )
+                    })?;
+                }
+            }
+
             println!(
                 "  {} {}",
                 s.green.apply_to("✔"),
@@ -706,23 +754,8 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
     let meta = read_meta(&ws_root)?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
-    let src_dir = ws_root.join("src");
-    let known_packages = list_packages(&ws_root)?;
-
-    // Determine which packages to sync
-    let targets: Vec<&str> = if packages.is_empty() {
-        known_packages.iter().map(|s| s.as_str()).collect()
-    } else {
-        let mut matched: Vec<&str> = Vec::new();
-        for name in packages {
-            if known_packages.iter().any(|p| p == name) {
-                matched.push(name);
-            } else {
-                bail!("package \"{name}\" not found in workspace {}", meta.name);
-            }
-        }
-        matched
-    };
+    let cfg = config::load_config()?;
+    let tracking = resolve_git_tracking(&meta, &cfg);
 
     println!();
     println!(
@@ -732,35 +765,35 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
     );
     println!("  {}", s.dim.apply_to("───────────────────────────"));
 
-    if targets.is_empty() {
-        println!("  {}  No packages to sync", s.dim.apply_to("—"));
-    }
-
-    let mut pulled: Vec<String> = Vec::new();
-    let mut failures: Vec<(String, String)> = Vec::new();
-
-    for &pkg_name in &targets {
-        let pkg_dir = src_dir.join(pkg_name);
-
-        if !pkg_dir.exists() {
-            let msg = format!("directory not found: {}", pkg_dir.display());
-            failures.push((pkg_name.to_string(), msg.clone()));
-            println!("  {} {} — {}", s.red.apply_to("✘"), pkg_name, msg);
-            continue;
+    if tracking == GitTracking::Workspace {
+        // Workspace-level sync: pull/fetch at the workspace root
+        if !packages.is_empty() {
+            println!(
+                "  {} Per-package filtering is not applicable in workspace-level tracking mode",
+                s.dim.apply_to("⚠"),
+            );
         }
 
-        let git_op = if fetch_only { "Fetching" } else { "Pulling" };
-        println!(
-            "  {} {} {} ...",
-            s.dim.apply_to("→"),
-            git_op,
-            s.cyan.apply_to(pkg_name)
-        );
+        if !ws_root.join(".git").exists() {
+            bail!(
+                "workspace-level git tracking is configured but no git repository found at {}.\n  \
+                 Run `git init` in the workspace directory.",
+                ws_root.display()
+            );
+        }
 
         let git_arg = if fetch_only { "fetch" } else { "pull" };
+        let git_op = if fetch_only { "Fetching" } else { "Pulling" };
+
+        println!(
+            "  {} {} workspace repository ...",
+            s.dim.apply_to("→"),
+            git_op,
+        );
+
         let output = Command::new("git")
             .arg(git_arg)
-            .current_dir(&pkg_dir)
+            .current_dir(&ws_root)
             .output()
             .with_context(|| format!("failed to execute git {git_arg} — is git installed?"))?;
 
@@ -772,34 +805,102 @@ pub(crate) fn sync(packages: &[String], workspace: Option<&str>, fetch_only: boo
             println!(
                 "  {} {} — {}",
                 s.green.apply_to("✔"),
-                s.bold.apply_to(pkg_name),
+                s.bold.apply_to("workspace"),
                 s.dim.apply_to(summary)
             );
-            pulled.push(pkg_name.to_string());
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let msg = stderr.trim().to_string();
-            failures.push((pkg_name.to_string(), msg.clone()));
-            println!("  {} {} — {}", s.red.apply_to("✘"), pkg_name, msg);
+            bail!("git {} failed: {}", git_arg, stderr.trim());
+        }
+    } else {
+        // Package-level sync: pull/fetch in each package directory
+        let src_dir = ws_root.join("src");
+        let known_packages = list_packages(&ws_root)?;
+
+        // Determine which packages to sync
+        let targets: Vec<&str> = if packages.is_empty() {
+            known_packages.iter().map(|s| s.as_str()).collect()
+        } else {
+            let mut matched: Vec<&str> = Vec::new();
+            for name in packages {
+                if known_packages.iter().any(|p| p == name) {
+                    matched.push(name);
+                } else {
+                    bail!("package \"{name}\" not found in workspace {}", meta.name);
+                }
+            }
+            matched
+        };
+
+        if targets.is_empty() {
+            println!("  {}  No packages to sync", s.dim.apply_to("—"));
+        }
+
+        let mut pulled: Vec<String> = Vec::new();
+        let mut failures: Vec<(String, String)> = Vec::new();
+
+        for &pkg_name in &targets {
+            let pkg_dir = src_dir.join(pkg_name);
+
+            if !pkg_dir.exists() {
+                let msg = format!("directory not found: {}", pkg_dir.display());
+                failures.push((pkg_name.to_string(), msg.clone()));
+                println!("  {} {} — {}", s.red.apply_to("✘"), pkg_name, msg);
+                continue;
+            }
+
+            let git_op = if fetch_only { "Fetching" } else { "Pulling" };
+            println!(
+                "  {} {} {} ...",
+                s.dim.apply_to("→"),
+                git_op,
+                s.cyan.apply_to(pkg_name)
+            );
+
+            let git_arg = if fetch_only { "fetch" } else { "pull" };
+            let output = Command::new("git")
+                .arg(git_arg)
+                .current_dir(&pkg_dir)
+                .output()
+                .with_context(|| format!("failed to execute git {git_arg} — is git installed?"))?;
+
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let fallback = if fetch_only { "done" } else { "up to date" };
+                let summary = stdout.lines().next().unwrap_or(fallback).trim();
+                let summary = if summary.is_empty() { fallback } else { summary };
+                println!(
+                    "  {} {} — {}",
+                    s.green.apply_to("✔"),
+                    s.bold.apply_to(pkg_name),
+                    s.dim.apply_to(summary)
+                );
+                pulled.push(pkg_name.to_string());
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let msg = stderr.trim().to_string();
+                failures.push((pkg_name.to_string(), msg.clone()));
+                println!("  {} {} — {}", s.red.apply_to("✘"), pkg_name, msg);
+            }
+        }
+
+        // Print package-level summary
+        let verb = if fetch_only { "fetched" } else { "pulled" };
+        println!();
+        if !failures.is_empty() {
+            println!("  {} {verb}, {} failed", pulled.len(), failures.len());
+        } else if !targets.is_empty() {
+            println!(
+                "  {} {} package{} synced",
+                s.green.apply_to("✔"),
+                pulled.len(),
+                if pulled.len() == 1 { "" } else { "s" }
+            );
         }
     }
 
     // Re-sync the .code-workspace file
     let ws_file_path = sync_workspace_file(&ws_root, &meta)?;
-
-    // Print summary
-    let verb = if fetch_only { "fetched" } else { "pulled" };
-    println!();
-    if !failures.is_empty() {
-        println!("  {} {verb}, {} failed", pulled.len(), failures.len());
-    } else if !targets.is_empty() {
-        println!(
-            "  {} {} package{} synced",
-            s.green.apply_to("✔"),
-            pulled.len(),
-            if pulled.len() == 1 { "" } else { "s" }
-        );
-    }
 
     let filename = ws_file_path
         .file_name()
@@ -834,10 +935,18 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
     let meta = read_meta(&ws_root)?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
+    let cfg = config::load_config()?;
+    let tracking = resolve_git_tracking(&meta, &cfg);
+
     let src_dir = ws_root.join("src");
     let pkg_names = list_packages(&ws_root)?;
 
     if json {
+        let tracking_str = match tracking {
+            GitTracking::Package => "package",
+            GitTracking::Workspace => "workspace",
+        };
+
         // Build a JSON representation with packages derived from disk
         let packages_json: Vec<serde_json::Value> = pkg_names
             .iter()
@@ -854,10 +963,20 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
             })
             .collect();
 
-        let output = serde_json::json!({
+        let mut output = serde_json::json!({
             "name": meta.name,
+            "git_tracking": tracking_str,
             "packages": packages_json,
         });
+
+        // In workspace mode, add workspace-level git info
+        if tracking == GitTracking::Workspace {
+            let ws_url = detect_git_remote_url(&ws_root);
+            let ws_branch = detect_git_branch(&ws_root);
+            output["git_url"] = if ws_url.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(ws_url) };
+            output["git_branch"] = if ws_branch.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(ws_branch) };
+        }
+
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
     }
@@ -892,9 +1011,38 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
     );
     println!(
         "  {}  {}",
+        s.cyan.apply_to("Git tracking:"),
+        tracking
+    );
+    println!(
+        "  {}  {}",
         s.cyan.apply_to("Packages:"),
         pkg_names.len()
     );
+
+    // In workspace mode, show workspace-level git info
+    if tracking == GitTracking::Workspace {
+        let ws_url = detect_git_remote_url(&ws_root);
+        let ws_branch = detect_git_branch(&ws_root);
+
+        println!();
+        println!("  {}", s.bold.apply_to("Workspace Git"));
+        println!("  {}", s.dim.apply_to("──────────────"));
+        if !ws_url.is_empty() {
+            println!(
+                "  {}  {}",
+                s.dim.apply_to("url:"),
+                s.dim.apply_to(&ws_url)
+            );
+        }
+        if !ws_branch.is_empty() {
+            println!(
+                "  {}  {}",
+                s.dim.apply_to("branch:"),
+                s.dim.apply_to(&ws_branch)
+            );
+        }
+    }
 
     if !pkg_names.is_empty() {
         println!();
@@ -903,27 +1051,32 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
 
         for name in &pkg_names {
             let pkg_dir = src_dir.join(name);
-            let url = detect_git_remote_url(&pkg_dir);
-            let branch = detect_git_branch(&pkg_dir);
 
             println!(
                 "  {}  {}",
                 s.cyan.apply_to("•"),
                 s.bold.apply_to(name),
             );
-            if !url.is_empty() {
-                println!(
-                    "     {}  {}",
-                    s.dim.apply_to("url:"),
-                    s.dim.apply_to(&url)
-                );
-            }
-            if !branch.is_empty() {
-                println!(
-                    "     {}  {}",
-                    s.dim.apply_to("branch:"),
-                    s.dim.apply_to(&branch)
-                );
+
+            // In package mode, show per-package git info
+            if tracking == GitTracking::Package {
+                let url = detect_git_remote_url(&pkg_dir);
+                let branch = detect_git_branch(&pkg_dir);
+
+                if !url.is_empty() {
+                    println!(
+                        "     {}  {}",
+                        s.dim.apply_to("url:"),
+                        s.dim.apply_to(&url)
+                    );
+                }
+                if !branch.is_empty() {
+                    println!(
+                        "     {}  {}",
+                        s.dim.apply_to("branch:"),
+                        s.dim.apply_to(&branch)
+                    );
+                }
             }
             println!(
                 "     {}  {}",
@@ -1094,6 +1247,25 @@ pub(crate) fn adopt(
         }
     }
 
+    // If workspace-level tracking, remove the adopted package's .git directory
+    let cfg = config::load_config()?;
+    let tracking = resolve_git_tracking(&meta, &cfg);
+    if tracking == GitTracking::Workspace {
+        let adopted_git_dir = dest.join(".git");
+        if adopted_git_dir.exists() {
+            fs::remove_dir_all(&adopted_git_dir).with_context(|| {
+                format!(
+                    "could not remove .git directory from adopted package: {}",
+                    adopted_git_dir.display()
+                )
+            })?;
+            println!(
+                "  {} Removed package-level .git (workspace-level tracking active)",
+                s.dim.apply_to("→"),
+            );
+        }
+    }
+
     // Sync the .code-workspace file (picks up the new directory in src/)
     sync_workspace_file(&ws_root, &meta)?;
 
@@ -1120,9 +1292,15 @@ mod tests {
 
     /// Helper: create a workspace directory with metadata and a `src/` dir.
     fn setup_workspace(dir: &Path, name: &str) {
+        setup_workspace_with_tracking(dir, name, None);
+    }
+
+    /// Helper: create a workspace with an explicit git tracking mode.
+    fn setup_workspace_with_tracking(dir: &Path, name: &str, tracking: Option<GitTracking>) {
         fs::create_dir_all(dir.join("src")).unwrap();
         let meta = WorkspaceMeta {
             name: name.to_string(),
+            git_tracking: tracking,
         };
         write_meta(dir, &meta).unwrap();
     }
@@ -1193,6 +1371,7 @@ mod tests {
         // No src/ directory at all
         let meta = WorkspaceMeta {
             name: "test".to_string(),
+            git_tracking: None,
         };
         write_meta(dir.path(), &meta).unwrap();
 
@@ -1599,5 +1778,38 @@ mod tests {
         let contents = fs::read_to_string(&ws_file).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["folders"][0]["path"], "src/pkg-a");
+    }
+
+    // ── resolve_git_tracking tests ───────────────────────────────
+
+    #[test]
+    fn resolve_tracking_workspace_override_wins() {
+        let meta = WorkspaceMeta {
+            name: "test".to_string(),
+            git_tracking: Some(GitTracking::Workspace),
+        };
+        let cfg = config::BuonaConfig::default(); // default tracking = Package
+        assert_eq!(resolve_git_tracking(&meta, &cfg), GitTracking::Workspace);
+    }
+
+    #[test]
+    fn resolve_tracking_falls_back_to_global() {
+        let meta = WorkspaceMeta {
+            name: "test".to_string(),
+            git_tracking: None,
+        };
+        let mut cfg = config::BuonaConfig::default();
+        cfg.git.tracking = GitTracking::Workspace;
+        assert_eq!(resolve_git_tracking(&meta, &cfg), GitTracking::Workspace);
+    }
+
+    #[test]
+    fn resolve_tracking_defaults_to_package() {
+        let meta = WorkspaceMeta {
+            name: "test".to_string(),
+            git_tracking: None,
+        };
+        let cfg = config::BuonaConfig::default();
+        assert_eq!(resolve_git_tracking(&meta, &cfg), GitTracking::Package);
     }
 }
