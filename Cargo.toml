@@ -1,6 +1,6 @@
 [package]
 name = "buona"
-version = "0.1.0"
+version = "0.1.4"
 edition = "2024"
 description = "The Good CLI — making life easier when managing complex workspace and build tasks"
 license = "MIT"
@@ -17,3 +17,15 @@ console = "0.16"
 
 [dev-dependencies]
 tempfile = "3"
+
+# cargo-release configuration
+[package.metadata.release]
+allow-branch = ["main"]
+publish = false
+push = true
+push-remote = "origin"
+tag-prefix = ""
+tag-name = "v{{version}}"
+tag-message = "Release v{{version}}"
+pre-release-commit-message = "chore: bump version to v{{version}}"
+pre-release-hook = ["just", "pre-release"]

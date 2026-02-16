@@ -36,32 +36,11 @@ pre-release:
     cargo clippy --all-targets --all-features -- -D warnings
     @echo "Pre-release checks passed!"
 
-# Tag and publish a release (triggers GitHub Actions release workflow)
-release version:
-    @if ! echo "{{version}}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then \
-      echo "Error: version must match X.Y.Z (example: 0.1.1)"; \
-      exit 1; \
-    fi
-    @if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then \
-      echo "Error: releases must be tagged from the main branch. Current branch: $(git rev-parse --abbrev-ref HEAD)"; \
-      exit 1; \
-    fi
-    @git fetch origin main --quiet
-    @if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then \
-      echo "Error: local main is not up to date with origin/main. Run 'git pull' first."; \
-      exit 1; \
-    fi
-    @if [ -n "$(git status --porcelain)" ]; then \
-      echo "Error: git worktree is dirty. Commit or stash changes before releasing."; \
-      exit 1; \
-    fi
-    @if git rev-parse "v{{version}}" >/dev/null 2>&1; then \
-      echo "Error: tag v{{version}} already exists."; \
-      exit 1; \
-    fi
-    just pre-release
-    git tag -a "v{{version}}" -m "Release v{{version}}"
-    git push origin "v{{version}}"
+# Publish a release: bumps version, commits, tags, and pushes (triggers CI → release)
+# Usage: just release patch|minor|major|X.Y.Z
+# Dry-run by default — pass --execute to actually release
+release *args:
+    cargo release {{args}}
 
 # Generate HTML coverage report (line + branch)
 coverage:

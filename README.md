@@ -551,6 +551,18 @@ The `packages` field is omitted when empty, so existing workspaces remain compat
 
 ## Development
 
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (stable)
+- [just](https://github.com/casey/just) (task runner)
+- [cargo-release](https://github.com/crate-ci/cargo-release) (release automation)
+
+```sh
+cargo install cargo-release
+```
+
+### Commands
+
 ```sh
 # Run buona with arguments
 just run <args>
@@ -558,8 +570,11 @@ just run <args>
 # Run tests
 just test
 
-# Create and push release tag (triggers GitHub release workflow)
-just release 0.1.1
+# Run the full CI check suite locally (formatting, linting, tests)
+just ci
+
+# Run pre-release checks only (formatting + linting)
+just pre-release
 
 # Example commands
 just config show
@@ -568,15 +583,19 @@ just workspace list
 
 ## Releasing
 
-1. Update `version` in `Cargo.toml`.
-2. Commit and push your changes to `main`.
-3. Create and push a release tag:
+Releases are managed by [cargo-release](https://github.com/crate-ci/cargo-release), which handles version bumping in `Cargo.toml`, committing, tagging, and pushing. The tag push triggers CI, and on success, GitHub Actions builds and publishes binaries for Linux, Intel macOS, and Apple Silicon macOS.
 
 ```sh
-just release 0.1.1
+# Dry-run (preview what will happen, no changes made)
+just release patch
+just release minor
+just release 0.2.0
+
+# Execute the release
+just release patch --execute
 ```
 
-This creates `v0.1.1`, pushes the tag, and triggers GitHub Actions to build and publish binaries for Linux, Intel macOS, and Apple Silicon macOS.
+Releases are restricted to the `main` branch. Before bumping the version, `cargo-release` runs `just pre-release` to verify formatting and linting pass.
 
 ## License
 
