@@ -53,8 +53,8 @@ enum Commands {
     /// Run a command in the current context or explicit target(s)
     Run {
         /// Force a specific build system (overrides auto-detection)
-        #[arg(long)]
-        system: Option<String>,
+        #[arg(long, value_enum)]
+        system: Option<run::BuildSystem>,
 
         /// Show the resolved command but don't execute it
         #[arg(long)]
@@ -125,8 +125,8 @@ enum WorkspaceCommands {
         open: bool,
 
         /// Git tracking mode for this workspace (overrides global default)
-        #[arg(long, value_parser = ["package", "workspace"])]
-        git_tracking: Option<String>,
+        #[arg(long, value_enum)]
+        git_tracking: Option<config::GitTracking>,
     },
 
     /// Delete a workspace
@@ -263,16 +263,12 @@ async fn main() -> anyhow::Result<()> {
                 open,
                 git_tracking,
             } => {
-                let tracking = git_tracking.map(|s| match s.as_str() {
-                    "workspace" => config::GitTracking::Workspace,
-                    _ => config::GitTracking::Package,
-                });
                 workspace::create(
                     Path::new(&path),
                     name.as_deref(),
                     packages.as_deref(),
                     open,
-                    tracking,
+                    git_tracking,
                 )
                 .await?;
             }

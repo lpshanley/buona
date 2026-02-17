@@ -3,10 +3,11 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 /// Known build systems that buona can drive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum BuildSystem {
     Cargo,

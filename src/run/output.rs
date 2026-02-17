@@ -2,6 +2,7 @@
 
 use crate::styles::Styles;
 
+use super::format::format_display;
 use super::hooks::HookResolution;
 use super::types::{ExecutionPlan, HookSource};
 
@@ -130,10 +131,4 @@ pub(super) fn print_dry_run_command_stage(
         s.dim.apply_to("skipped"),
         s.dim.apply_to(suffix),
     );
-}
-
-fn format_display(program: &str, args: &[String]) -> String {
-    let mut parts = vec![program.to_string()];
-    parts.extend(args.iter().cloned());
-    parts.join(" ")
 }

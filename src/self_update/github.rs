@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use reqwest::Client;
+use std::time::Duration;
 
 use super::types::{GitHubAsset, GitHubRelease};
 
@@ -10,6 +11,8 @@ const REPO: &str = "lpshanley/buona";
 fn client() -> Result<Client> {
     Client::builder()
         .user_agent(format!("buona/{}", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
         .build()
         .context("failed to create HTTP client")
 }

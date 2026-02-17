@@ -6,9 +6,10 @@
 
 use std::path::PathBuf;
 
-use super::config::BuonaRunConfig;
+use super::config::{BuonaRunConfig, ConfigSystem};
 use super::detect::detect_build_system;
 use super::error::RunError;
+use super::format::format_display;
 use super::systems::{proxy_command, standard_mapping};
 use super::types::*;
 
@@ -21,7 +22,7 @@ pub(super) struct ResolveInput {
     /// Additional args the user typed (tokens after the command).
     pub(super) extra_args: Vec<String>,
     /// CLI `--system` override (if provided).
-    pub(super) cli_system: Option<String>,
+    pub(super) cli_system: Option<BuildSystem>,
     /// Per-package `buona.json` config (if present).
     pub(super) package_config: Option<BuonaRunConfig>,
 }
@@ -50,7 +51,7 @@ pub(super) async fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, 
         let system = resolve_effective_system(
             cmd_config.system,
             input.package_config.as_ref(),
-            input.cli_system.as_deref(),
+            input.cli_system,
             &input.package_dir,
         )
         .await
@@ -79,7 +80,7 @@ pub(super) async fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, 
     let system = resolve_effective_system(
         per_command_system,
         input.package_config.as_ref(),
-        input.cli_system.as_deref(),
+        input.cli_system,
         &input.package_dir,
     )
     .await?;
@@ -145,7 +146,7 @@ pub(super) async fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, 
 async fn resolve_effective_system(
     per_command: Option<BuildSystem>,
     package_config: Option<&BuonaRunConfig>,
-    cli_system: Option<&str>,
+    cli_system: Option<BuildSystem>,
     package_dir: &std::path::Path,
 ) -> Result<Option<BuildSystem>, RunError> {
     // 1. Per-command override
@@ -153,18 +154,17 @@ async fn resolve_effective_system(
         return Ok(Some(system));
     }
 
-    // 2. Global system in buona.json (if not "auto")
-    if let Some(config) = package_config
-        && config.system != "auto"
-    {
-        return parse_system_name(&config.system).map(Some);
+    // 2. Global system in buona.json
+    if let Some(config) = package_config {
+        match config.system {
+            ConfigSystem::Fixed(system) => return Ok(Some(system)),
+            ConfigSystem::Auto => {}
+        }
     }
 
     // 3. CLI --system
-    if let Some(name) = cli_system
-        && name != "auto"
-    {
-        return parse_system_name(name).map(Some);
+    if let Some(system) = cli_system {
+        return Ok(Some(system));
     }
 
     // 4. Auto-detect
@@ -181,19 +181,6 @@ fn noop_plan(cwd: PathBuf, system: Option<BuildSystem>, reason: SkipReason) -> E
         display: "skipped".to_string(),
         skip_reason: Some(reason),
     }
-}
-
-/// Parse a system name string into a [`BuildSystem`] enum.
-fn parse_system_name(name: &str) -> Result<BuildSystem, RunError> {
-    serde_json::from_value(serde_json::Value::String(name.to_string()))
-        .map_err(|_| RunError::UnknownSystem(name.to_string()))
-}
-
-/// Format a display string from program and args.
-fn format_display(program: &str, args: &[String]) -> String {
-    let mut parts = vec![program.to_string()];
-    parts.extend(args.iter().cloned());
-    parts.join(" ")
 }
 
 #[cfg(test)]
@@ -307,30 +294,12 @@ mod tests {
             package_dir: dir.path().to_path_buf(),
             command: "test".to_string(),
             extra_args: vec![],
-            cli_system: Some("cargo".to_string()),
+            cli_system: Some(BuildSystem::Cargo),
             package_config: None,
         };
         let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.system, Some(BuildSystem::Cargo));
         assert_eq!(plan.program.as_deref(), Some("cargo"));
-    }
-
-    #[tokio::test]
-    async fn unknown_cli_system_returns_error() {
-        let dir = TempDir::new().unwrap();
-        let input = ResolveInput {
-            package_dir: dir.path().to_path_buf(),
-            command: "test".to_string(),
-            extra_args: vec![],
-            cli_system: Some("foobar".to_string()),
-            package_config: None,
-        };
-        let result = resolve_plan(&input).await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            RunError::UnknownSystem(name) => assert_eq!(name, "foobar"),
-            other => panic!("expected UnknownSystem, got: {other}"),
-        }
     }
 
     // ── buona.json config overrides ──────────────────────────────
@@ -340,7 +309,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         // No marker files — rely on config
         let config = BuonaRunConfig {
-            system: "npm".to_string(),
+            system: ConfigSystem::Fixed(BuildSystem::Npm),
             commands: HashMap::new(),
             hooks_dir: ".buona/hooks".to_string(),
             hooks: HashMap::new(),
@@ -371,7 +340,7 @@ mod tests {
             },
         );
         let config = BuonaRunConfig {
-            system: "auto".to_string(),
+            system: ConfigSystem::Auto,
             commands,
             hooks_dir: ".buona/hooks".to_string(),
             hooks: HashMap::new(),
@@ -407,7 +376,7 @@ mod tests {
             },
         );
         let config = BuonaRunConfig {
-            system: "auto".to_string(),
+            system: ConfigSystem::Auto,
             commands,
             hooks_dir: ".buona/hooks".to_string(),
             hooks: HashMap::new(),
@@ -437,7 +406,7 @@ mod tests {
             },
         );
         let config = BuonaRunConfig {
-            system: "auto".to_string(),
+            system: ConfigSystem::Auto,
             commands,
             hooks_dir: ".buona/hooks".to_string(),
             hooks: HashMap::new(),
@@ -471,8 +440,8 @@ mod tests {
             },
         );
         let config = BuonaRunConfig {
-            system: "cargo".to_string(), // global says cargo
-            commands,                    // but build says make
+            system: ConfigSystem::Fixed(BuildSystem::Cargo), // global says cargo
+            commands,                                        // but build says make
             hooks_dir: ".buona/hooks".to_string(),
             hooks: HashMap::new(),
         };
@@ -491,7 +460,7 @@ mod tests {
     async fn global_config_beats_cli_system() {
         let dir = TempDir::new().unwrap();
         let config = BuonaRunConfig {
-            system: "npm".to_string(),
+            system: ConfigSystem::Fixed(BuildSystem::Npm),
             commands: HashMap::new(),
             hooks_dir: ".buona/hooks".to_string(),
             hooks: HashMap::new(),
@@ -500,8 +469,8 @@ mod tests {
             package_dir: dir.path().to_path_buf(),
             command: "test".to_string(),
             extra_args: vec![],
-            cli_system: Some("cargo".to_string()), // CLI says cargo
-            package_config: Some(config),          // config says npm
+            cli_system: Some(BuildSystem::Cargo), // CLI says cargo
+            package_config: Some(config),         // config says npm
         };
         let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.system, Some(BuildSystem::Npm)); // config wins
@@ -516,7 +485,7 @@ mod tests {
             package_dir: dir.path().to_path_buf(),
             command: "test".to_string(),
             extra_args: vec![],
-            cli_system: Some("npm".to_string()), // CLI says npm
+            cli_system: Some(BuildSystem::Npm), // CLI says npm
             package_config: None,
         };
         let plan = resolve_plan(&input).await.unwrap();
@@ -532,7 +501,7 @@ mod tests {
             package_dir: dir.path().to_path_buf(),
             command: "dev".to_string(),
             extra_args: vec![],
-            cli_system: Some("cargo".to_string()),
+            cli_system: Some(BuildSystem::Cargo),
             package_config: None,
         };
         let plan = resolve_plan(&input).await.unwrap();

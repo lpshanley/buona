@@ -7,6 +7,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use dialoguer::{Input, Select};
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +51,7 @@ impl fmt::Display for Ide {
 }
 
 /// Git tracking modes for workspaces.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum GitTracking {
     /// Each package has its own .git directory (default).

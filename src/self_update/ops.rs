@@ -225,7 +225,14 @@ fn replace_binary(target: &std::path::Path, data: &[u8]) -> Result<()> {
         .parent()
         .context("could not determine binary directory")?;
 
-    let tmp_path = dir.join(".buona.update.tmp");
+    let tmp_path = dir.join(format!(
+        ".buona.update.{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
 
     // Write new binary
     std::fs::write(&tmp_path, data)

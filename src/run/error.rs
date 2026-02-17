@@ -12,8 +12,6 @@ pub(crate) enum RunError {
     NotInWorkspace(String),
     /// Could not determine which package the user is in (exit 65).
     NoPackageResolved(String),
-    /// Unknown build system name (exit 66).
-    UnknownSystem(String),
     /// buona.json is malformed or has conflicting settings (exit 68).
     ConfigError(String),
     /// Ambiguous hook: multiple files in hooksDir match the same hook name (exit 69).
@@ -21,8 +19,9 @@ pub(crate) enum RunError {
         hook_name: String,
         candidates: Vec<String>,
     },
+    /// A resolved main command failed. Exit code is forwarded from the child process.
+    CommandFailed { command: String, exit_code: i32 },
     /// A hook process failed. Exit code is forwarded from the child process.
-    #[allow(dead_code)]
     HookFailed { hook_name: String, exit_code: i32 },
 }
 
@@ -32,9 +31,9 @@ impl RunError {
         match self {
             RunError::NotInWorkspace(_) => 64,
             RunError::NoPackageResolved(_) => 65,
-            RunError::UnknownSystem(_) => 66,
             RunError::ConfigError(_) => 68,
             RunError::AmbiguousHook { .. } => 69,
+            RunError::CommandFailed { exit_code, .. } => *exit_code,
             RunError::HookFailed { exit_code, .. } => *exit_code,
         }
     }
@@ -51,7 +50,6 @@ impl fmt::Display for RunError {
         match self {
             RunError::NotInWorkspace(msg) => write!(f, "{msg}"),
             RunError::NoPackageResolved(msg) => write!(f, "{msg}"),
-            RunError::UnknownSystem(name) => write!(f, "unknown build system: \"{name}\""),
             RunError::ConfigError(msg) => write!(f, "config error: {msg}"),
             RunError::AmbiguousHook {
                 hook_name,
@@ -62,6 +60,9 @@ impl fmt::Display for RunError {
                     "ambiguous hook \"{hook_name}\": multiple files match in hooks directory: {}",
                     candidates.join(", ")
                 )
+            }
+            RunError::CommandFailed { command, exit_code } => {
+                write!(f, "command \"{command}\" failed with exit code {exit_code}")
             }
             RunError::HookFailed {
                 hook_name,
@@ -83,14 +84,7 @@ mod tests {
     fn exit_codes_are_correct() {
         assert_eq!(RunError::NotInWorkspace(String::new()).exit_code(), 64);
         assert_eq!(RunError::NoPackageResolved(String::new()).exit_code(), 65);
-        assert_eq!(RunError::UnknownSystem(String::new()).exit_code(), 66);
         assert_eq!(RunError::ConfigError(String::new()).exit_code(), 68);
-    }
-
-    #[test]
-    fn display_unknown_system() {
-        let err = RunError::UnknownSystem("foobar".to_string());
-        assert_eq!(err.to_string(), "unknown build system: \"foobar\"");
     }
 
     #[test]
@@ -124,6 +118,18 @@ mod tests {
     }
 
     #[test]
+    fn exit_code_command_failed_forwards_child_code() {
+        assert_eq!(
+            RunError::CommandFailed {
+                command: "cargo test".to_string(),
+                exit_code: 5,
+            }
+            .exit_code(),
+            5
+        );
+    }
+
+    #[test]
     fn display_ambiguous_hook() {
         let err = RunError::AmbiguousHook {
             hook_name: "prebuild".to_string(),
@@ -140,5 +146,17 @@ mod tests {
             exit_code: 1,
         };
         assert_eq!(err.to_string(), "hook \"prebuild\" failed with exit code 1");
+    }
+
+    #[test]
+    fn display_command_failed() {
+        let err = RunError::CommandFailed {
+            command: "cargo test".to_string(),
+            exit_code: 101,
+        };
+        assert_eq!(
+            err.to_string(),
+            "command \"cargo test\" failed with exit code 101"
+        );
     }
 }

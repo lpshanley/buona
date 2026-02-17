@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use super::config::HookValue;
 use super::error::RunError;
+use super::format::format_display;
 use super::systems::{proxy_command, standard_mapping};
 use super::types::*;
 
@@ -59,10 +60,17 @@ pub(super) async fn scan_hooks_dir(hooks_dir: &Path) -> Vec<HookFile> {
 
     let mut results = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        if !path.is_file() {
+        let file_type = match entry.file_type().await {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+
+        if !file_type.is_file() {
             continue;
         }
+
+        let path = entry.path();
+
         let stem = match path.file_stem() {
             Some(s) => s.to_string_lossy().to_string(),
             None => continue,
@@ -304,13 +312,6 @@ fn strip_hook_prefix(hook_name: &str) -> String {
 fn parse_as_build_system(name: &str) -> Result<BuildSystem, ()> {
     serde_json::from_value::<BuildSystem>(serde_json::Value::String(name.to_string()))
         .map_err(|_| ())
-}
-
-/// Format a display string from program and args.
-fn format_display(program: &str, args: &[String]) -> String {
-    let mut parts = vec![program.to_string()];
-    parts.extend(args.iter().cloned());
-    parts.join(" ")
 }
 
 #[cfg(test)]

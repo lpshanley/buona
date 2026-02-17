@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer};
 
 use super::types::BuildSystem;
 
@@ -34,6 +35,30 @@ pub(super) struct CommandConfig {
     pub(super) exec: Option<Vec<String>>,
 }
 
+/// Typed global system selection from `buona.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum ConfigSystem {
+    #[default]
+    Auto,
+    Fixed(BuildSystem),
+}
+
+impl<'de> Deserialize<'de> for ConfigSystem {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        if raw == "auto" {
+            return Ok(Self::Auto);
+        }
+
+        serde_json::from_value::<BuildSystem>(serde_json::Value::String(raw.clone()))
+            .map(Self::Fixed)
+            .map_err(|_| DeError::custom(format!("unknown build system \"{raw}\"")))
+    }
+}
+
 /// Per-package configuration loaded from `buona.json`.
 ///
 /// Example:
@@ -48,10 +73,10 @@ pub(super) struct CommandConfig {
 /// ```
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct BuonaRunConfig {
-    /// Global build system for this package ("auto" or a system name).
-    /// Defaults to "auto" if omitted.
-    #[serde(default = "default_system_str")]
-    pub(super) system: String,
+    /// Global build system for this package.
+    /// Defaults to `auto` if omitted.
+    #[serde(default = "default_system")]
+    pub(super) system: ConfigSystem,
 
     /// Per-command overrides.
     #[serde(default)]
@@ -70,8 +95,8 @@ pub(super) struct BuonaRunConfig {
     pub(super) hooks: HashMap<String, HookValue>,
 }
 
-fn default_system_str() -> String {
-    "auto".to_string()
+fn default_system() -> ConfigSystem {
+    ConfigSystem::Auto
 }
 
 fn default_hooks_dir() -> String {
@@ -126,7 +151,7 @@ mod tests {
         .unwrap();
 
         let config = load_package_config(dir.path()).await.unwrap().unwrap();
-        assert_eq!(config.system, "cargo");
+        assert_eq!(config.system, ConfigSystem::Fixed(BuildSystem::Cargo));
         assert!(config.commands.is_empty());
     }
 
@@ -146,7 +171,7 @@ mod tests {
         .unwrap();
 
         let config = load_package_config(dir.path()).await.unwrap().unwrap();
-        assert_eq!(config.system, "auto");
+        assert_eq!(config.system, ConfigSystem::Auto);
         assert_eq!(config.commands.len(), 2);
 
         let build = &config.commands["build"];
@@ -164,7 +189,7 @@ mod tests {
         std::fs::write(dir.path().join(PACKAGE_CONFIG_FILE), r#"{}"#).unwrap();
 
         let config = load_package_config(dir.path()).await.unwrap().unwrap();
-        assert_eq!(config.system, "auto");
+        assert_eq!(config.system, ConfigSystem::Auto);
     }
 
     #[tokio::test]
@@ -250,7 +275,7 @@ mod tests {
         .unwrap();
 
         let config = load_package_config(dir.path()).await.unwrap().unwrap();
-        assert_eq!(config.system, "cargo");
+        assert_eq!(config.system, ConfigSystem::Fixed(BuildSystem::Cargo));
         assert_eq!(config.hooks_dir, ".buona/hooks");
         assert!(config.hooks.is_empty());
     }
