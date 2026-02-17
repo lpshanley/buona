@@ -2,6 +2,7 @@
 
 mod config;
 mod run;
+mod self_update;
 mod styles;
 mod workspace;
 
@@ -78,6 +79,13 @@ enum Commands {
         /// Additional arguments passed through to the underlying tool (after --)
         #[arg(last = true)]
         args: Vec<String>,
+    },
+
+    /// Manage the buona binary itself
+    #[command(name = "self", arg_required_else_help = true)]
+    Self_ {
+        #[command(subcommand)]
+        command: SelfCommands,
     },
 }
 
@@ -209,26 +217,44 @@ enum WorkspaceCommands {
     },
 }
 
-fn main() -> anyhow::Result<()> {
+#[derive(Subcommand)]
+enum SelfCommands {
+    /// Check for and install updates
+    Update {
+        /// Only check for updates without installing
+        #[arg(long)]
+        check: bool,
+
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Install a specific version (e.g. v0.1.5 or 0.1.5)
+        version: Option<String>,
+    },
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Config { command } => match command {
             ConfigCommands::Show { json } => {
-                let cfg = config::load_config()?;
+                let cfg = config::load_config().await?;
                 if json {
                     config::print_json(&cfg)?;
                 } else {
-                    config::print_pretty(&cfg)?;
+                    config::print_pretty(&cfg).await?;
                 }
             }
             ConfigCommands::Setup => {
-                config::run_setup()?;
+                config::run_setup().await?;
             }
         },
         Commands::Workspace { command } => match command {
             WorkspaceCommands::List => {
-                workspace::list()?;
+                workspace::list().await?;
             }
             WorkspaceCommands::Create {
                 path,
@@ -247,36 +273,37 @@ fn main() -> anyhow::Result<()> {
                     packages.as_deref(),
                     open,
                     tracking,
-                )?;
+                )
+                .await?;
             }
             WorkspaceCommands::Delete { workspace, force } => {
-                workspace::delete(&workspace, force)?;
+                workspace::delete(&workspace, force).await?;
             }
             WorkspaceCommands::Add {
                 packages,
                 workspace,
             } => {
-                workspace::add(&packages, workspace.as_deref())?;
+                workspace::add(&packages, workspace.as_deref()).await?;
             }
             WorkspaceCommands::Remove {
                 packages,
                 workspace,
                 force,
             } => {
-                workspace::remove_packages(&packages, workspace.as_deref(), force)?;
+                workspace::remove_packages(&packages, workspace.as_deref(), force).await?;
             }
             WorkspaceCommands::Sync {
                 packages,
                 workspace,
                 fetch,
             } => {
-                workspace::sync(&packages, workspace.as_deref(), fetch)?;
+                workspace::sync(&packages, workspace.as_deref(), fetch).await?;
             }
             WorkspaceCommands::Open { workspace } => {
-                workspace::open(workspace.as_deref())?;
+                workspace::open(workspace.as_deref()).await?;
             }
             WorkspaceCommands::Info { workspace, json } => {
-                workspace::info(workspace.as_deref(), json)?;
+                workspace::info(workspace.as_deref(), json).await?;
             }
             WorkspaceCommands::Adopt {
                 path,
@@ -289,11 +316,12 @@ fn main() -> anyhow::Result<()> {
                     workspace.as_deref(),
                     copy,
                     name.as_deref(),
-                )?;
+                )
+                .await?;
             }
         },
         Commands::Detect { targets, recursive } => {
-            if let Err(e) = run::detect(targets, recursive) {
+            if let Err(e) = run::detect(targets, recursive).await {
                 if let Some(run_err) = e.downcast_ref::<run::RunError>() {
                     run_err.exit();
                 }
@@ -319,7 +347,7 @@ fn main() -> anyhow::Result<()> {
                 command,
                 args,
             };
-            if let Err(e) = run::execute(options) {
+            if let Err(e) = run::execute(options).await {
                 if let Some(run_err) = e.downcast_ref::<run::RunError>() {
                     run_err.exit();
                 }
@@ -327,6 +355,20 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
+        Commands::Self_ { command } => match command {
+            SelfCommands::Update {
+                check,
+                yes,
+                version,
+            } => {
+                self_update::update(self_update::UpdateOptions {
+                    check,
+                    yes,
+                    version,
+                })
+                .await?;
+            }
+        },
     }
 
     Ok(())

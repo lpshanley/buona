@@ -2,9 +2,9 @@
 //! plan resolution, and process execution.
 
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use tokio::process::Command;
 
 use anyhow::{Context, Result};
 
@@ -57,7 +57,7 @@ struct TargetRunPlan {
 }
 
 /// Execute the run command.
-pub(crate) fn execute(options: RunOptions) -> Result<()> {
+pub(crate) async fn execute(options: RunOptions) -> Result<()> {
     let s = Styles::default();
 
     let command_name = &options.command;
@@ -71,7 +71,7 @@ pub(crate) fn execute(options: RunOptions) -> Result<()> {
     }
 
     let cwd = env::current_dir().context("could not determine current directory")?;
-    let ws_root = workspace::find_workspace_root(&cwd).map_err(|_| {
+    let ws_root = workspace::find_workspace_root(&cwd).await.map_err(|_| {
         RunError::NotInWorkspace(
             "not inside a buona workspace (no buona.workspace.json found)\n  \
              Run this command from within a workspace."
@@ -80,14 +80,15 @@ pub(crate) fn execute(options: RunOptions) -> Result<()> {
     })?;
 
     if options.recursive {
-        return execute_recursive(&options, &ws_root);
+        return execute_recursive(&options, &ws_root).await;
     }
 
-    let targets = resolve_targets(&cwd, &ws_root, &options.targets, false)?;
+    let targets = resolve_targets(&cwd, &ws_root, &options.targets, false).await?;
 
     for target in targets {
         let target_plan =
-            resolve_target_run_plan(target, command_name, extra_args, options.system.clone())?;
+            resolve_target_run_plan(target, command_name, extra_args, options.system.clone())
+                .await?;
 
         output::print_plan_info(
             &s,
@@ -128,7 +129,7 @@ pub(crate) fn execute(options: RunOptions) -> Result<()> {
             continue;
         }
 
-        execute_with_hooks(&target_plan.plan, target_plan.hooks)?;
+        execute_with_hooks(&target_plan.plan, target_plan.hooks).await?;
     }
 
     if options.dry_run {
@@ -138,9 +139,9 @@ pub(crate) fn execute(options: RunOptions) -> Result<()> {
     Ok(())
 }
 
-fn execute_recursive(options: &RunOptions, ws_root: &Path) -> Result<()> {
+async fn execute_recursive(options: &RunOptions, ws_root: &Path) -> Result<()> {
     let s = Styles::default();
-    let pkg_targets = list_workspace_package_targets(ws_root)?;
+    let pkg_targets = list_workspace_package_targets(ws_root).await?;
     let ws_target = ExecutionTarget {
         name: "root".to_string(),
         dir: ws_root.to_path_buf(),
@@ -152,16 +153,20 @@ fn execute_recursive(options: &RunOptions, ws_root: &Path) -> Result<()> {
         &options.command,
         &options.args,
         options.system.clone(),
-    )?;
+    )
+    .await?;
 
     let mut pkg_plans = Vec::new();
     for target in pkg_targets {
-        pkg_plans.push(resolve_target_run_plan(
-            target,
-            &options.command,
-            &options.args,
-            options.system.clone(),
-        )?);
+        pkg_plans.push(
+            resolve_target_run_plan(
+                target,
+                &options.command,
+                &options.args,
+                options.system.clone(),
+            )
+            .await?,
+        );
     }
 
     if options.dry_run {
@@ -213,22 +218,22 @@ fn execute_recursive(options: &RunOptions, ws_root: &Path) -> Result<()> {
     if let Some(ref hooks) = ws_plan.hooks
         && let Some(ref pre) = hooks.pre_hook
     {
-        let status = execute_hook(pre)?;
+        let status = execute_hook(pre).await?;
         if !status.success() {
             std::process::exit(status.code().unwrap_or(1));
         }
     }
 
-    execute_plan(&ws_plan.plan)?;
+    execute_plan(&ws_plan.plan).await?;
 
     for pkg in &pkg_plans {
-        execute_with_hooks(&pkg.plan, pkg.hooks.clone())?;
+        execute_with_hooks(&pkg.plan, pkg.hooks.clone()).await?;
     }
 
     if let Some(ref hooks) = ws_plan.hooks
         && let Some(ref post) = hooks.post_hook
     {
-        let status = execute_hook(post)?;
+        let status = execute_hook(post).await?;
         if !status.success() {
             std::process::exit(status.code().unwrap_or(1));
         }
@@ -237,7 +242,7 @@ fn execute_recursive(options: &RunOptions, ws_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn resolve_target_run_plan(
+async fn resolve_target_run_plan(
     target: ExecutionTarget,
     command_name: &str,
     extra_args: &[String],
@@ -245,8 +250,9 @@ fn resolve_target_run_plan(
 ) -> Result<TargetRunPlan> {
     let s = Styles::default();
 
-    let package_config =
-        load_package_config(&target.dir).map_err(|e| RunError::ConfigError(format!("{e}")))?;
+    let package_config = load_package_config(&target.dir)
+        .await
+        .map_err(|e| RunError::ConfigError(format!("{e}")))?;
 
     let hooks_dir = package_config
         .as_ref()
@@ -264,10 +270,10 @@ fn resolve_target_run_plan(
         cli_system,
         package_config,
     };
-    let plan = resolve_plan(&input)?;
+    let plan = resolve_plan(&input).await?;
 
     let hooks_dir_path = target.dir.join(&hooks_dir);
-    let convention_hooks = hooks::scan_hooks_dir(&hooks_dir_path);
+    let convention_hooks = hooks::scan_hooks_dir(&hooks_dir_path).await;
     let hook_input = hooks::HookResolveInput {
         command: command_name.to_string(),
         package_dir: target.dir.clone(),
@@ -287,7 +293,7 @@ fn resolve_target_run_plan(
     })
 }
 
-fn resolve_targets(
+async fn resolve_targets(
     cwd: &Path,
     ws_root: &Path,
     target_names: &[String],
@@ -299,7 +305,7 @@ fn resolve_targets(
             dir: ws_root.to_path_buf(),
             is_workspace_root: true,
         }];
-        targets.extend(list_workspace_package_targets(ws_root)?);
+        targets.extend(list_workspace_package_targets(ws_root).await?);
         return Ok(targets);
     }
 
@@ -355,22 +361,24 @@ fn resolve_closest_target(cwd: &Path, ws_root: &Path) -> Result<ExecutionTarget,
     })
 }
 
-fn list_workspace_package_targets(ws_root: &Path) -> Result<Vec<ExecutionTarget>, RunError> {
+async fn list_workspace_package_targets(ws_root: &Path) -> Result<Vec<ExecutionTarget>, RunError> {
     let src_dir = ws_root.join("src");
-    let mut targets = Vec::new();
     if !src_dir.is_dir() {
-        return Ok(targets);
+        return Ok(Vec::new());
     }
 
-    let entries = fs::read_dir(&src_dir).map_err(|e| {
+    let mut entries = tokio::fs::read_dir(&src_dir).await.map_err(|e| {
         RunError::ConfigError(format!(
             "could not read src directory {}: {e}",
             src_dir.display()
         ))
     })?;
-    for entry in entries {
-        let entry =
-            entry.map_err(|e| RunError::ConfigError(format!("could not read src entry: {e}")))?;
+    let mut targets = Vec::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| RunError::ConfigError(format!("could not read src entry: {e}")))?
+    {
         let path = entry.path();
         if !path.is_dir() {
             continue;
@@ -387,7 +395,7 @@ fn list_workspace_package_targets(ws_root: &Path) -> Result<Vec<ExecutionTarget>
 }
 
 /// Print the auto-detected build system and all marker files found.
-pub(crate) fn detect(targets: Vec<String>, recursive: bool) -> Result<()> {
+pub(crate) async fn detect(targets: Vec<String>, recursive: bool) -> Result<()> {
     let s = Styles::default();
 
     if recursive && !targets.is_empty() {
@@ -398,7 +406,7 @@ pub(crate) fn detect(targets: Vec<String>, recursive: bool) -> Result<()> {
     }
 
     let cwd = env::current_dir().context("could not determine current directory")?;
-    let ws_root = workspace::find_workspace_root(&cwd).map_err(|_| {
+    let ws_root = workspace::find_workspace_root(&cwd).await.map_err(|_| {
         RunError::NotInWorkspace(
             "not inside a buona workspace (no buona.workspace.json found)\n  \
              Run this command from within a workspace."
@@ -406,11 +414,11 @@ pub(crate) fn detect(targets: Vec<String>, recursive: bool) -> Result<()> {
         )
     })?;
 
-    let detect_targets = resolve_targets(&cwd, &ws_root, &targets, recursive)?;
+    let detect_targets = resolve_targets(&cwd, &ws_root, &targets, recursive).await?;
 
     println!();
     for target in detect_targets {
-        let detections = detect_all_systems(&target.dir);
+        let detections = detect_all_systems(&target.dir).await;
         println!(
             "  {} {}",
             s.bold.apply_to("target:"),
@@ -446,7 +454,7 @@ pub(crate) fn detect(targets: Vec<String>, recursive: bool) -> Result<()> {
     Ok(())
 }
 
-fn execute_plan(plan: &ExecutionPlan) -> Result<()> {
+async fn execute_plan(plan: &ExecutionPlan) -> Result<()> {
     let Some(program) = plan.program.as_ref() else {
         return Ok(());
     };
@@ -455,6 +463,7 @@ fn execute_plan(plan: &ExecutionPlan) -> Result<()> {
         .args(&plan.args)
         .current_dir(&plan.cwd)
         .status()
+        .await
         .with_context(|| {
             format!(
                 "failed to execute {} — is it installed and on your PATH?",
@@ -494,7 +503,10 @@ fn resolve_package_dir(cwd: &Path, ws_root: &Path) -> Result<PathBuf, RunError> 
     ))
 }
 
-fn execute_with_hooks(plan: &ExecutionPlan, hook_resolution: Option<HookResolution>) -> Result<()> {
+async fn execute_with_hooks(
+    plan: &ExecutionPlan,
+    hook_resolution: Option<HookResolution>,
+) -> Result<()> {
     let (pre_hook, post_hook) = match hook_resolution {
         Some(res) => (res.pre_hook, res.post_hook),
         None => (None, None),
@@ -502,18 +514,18 @@ fn execute_with_hooks(plan: &ExecutionPlan, hook_resolution: Option<HookResoluti
 
     // 1. Run pre-hook if present
     if let Some(ref hook) = pre_hook {
-        let status = execute_hook(hook)?;
+        let status = execute_hook(hook).await?;
         if !status.success() {
             std::process::exit(status.code().unwrap_or(1));
         }
     }
 
     // 2. Run main command (if runnable)
-    execute_plan(plan)?;
+    execute_plan(plan).await?;
 
     // 3. Run post-hook if present
     if let Some(ref hook) = post_hook {
-        let status = execute_hook(hook)?;
+        let status = execute_hook(hook).await?;
         if !status.success() {
             std::process::exit(status.code().unwrap_or(1));
         }
@@ -522,7 +534,7 @@ fn execute_with_hooks(plan: &ExecutionPlan, hook_resolution: Option<HookResoluti
     Ok(())
 }
 
-fn execute_hook(hook: &ResolvedHook) -> Result<std::process::ExitStatus> {
+async fn execute_hook(hook: &ResolvedHook) -> Result<std::process::ExitStatus> {
     let s = Styles::default();
     println!(
         "  {} {}",
@@ -535,6 +547,7 @@ fn execute_hook(hook: &ResolvedHook) -> Result<std::process::ExitStatus> {
         .args(&hook.args)
         .current_dir(&hook.cwd)
         .status()
+        .await
         .with_context(|| {
             format!(
                 "failed to execute hook \"{}\" ({}) — is it installed and on your PATH?",
@@ -618,45 +631,53 @@ mod tests {
         assert_eq!(result_b.file_name().unwrap().to_string_lossy(), "pkg-b");
     }
 
-    #[test]
-    fn resolve_targets_closest_defaults_to_package() {
+    #[tokio::test]
+    async fn resolve_targets_closest_defaults_to_package() {
         let dir = TempDir::new().unwrap();
         let pkg_dir = setup_workspace_with_package(dir.path(), "test-ws", "pkg-a");
 
-        let targets = resolve_targets(&pkg_dir, dir.path(), &[], false).unwrap();
+        let targets = resolve_targets(&pkg_dir, dir.path(), &[], false)
+            .await
+            .unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].label(), "pkg-a");
     }
 
-    #[test]
-    fn resolve_targets_closest_defaults_to_root() {
+    #[tokio::test]
+    async fn resolve_targets_closest_defaults_to_root() {
         let dir = TempDir::new().unwrap();
         setup_workspace_with_package(dir.path(), "test-ws", "pkg-a");
 
-        let targets = resolve_targets(dir.path(), dir.path(), &[], false).unwrap();
+        let targets = resolve_targets(dir.path(), dir.path(), &[], false)
+            .await
+            .unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].label(), "root");
     }
 
-    #[test]
-    fn resolve_targets_respects_ordered_explicit_targets() {
+    #[tokio::test]
+    async fn resolve_targets_respects_ordered_explicit_targets() {
         let dir = TempDir::new().unwrap();
         setup_workspace_with_package(dir.path(), "test-ws", "pkg-a");
         fs::create_dir_all(dir.path().join("src").join("pkg-b")).unwrap();
 
         let requested = vec!["pkg-b".to_string(), "root".to_string(), "pkg-a".to_string()];
-        let targets = resolve_targets(dir.path(), dir.path(), &requested, false).unwrap();
+        let targets = resolve_targets(dir.path(), dir.path(), &requested, false)
+            .await
+            .unwrap();
         let labels: Vec<String> = targets.iter().map(|t| t.label()).collect();
         assert_eq!(labels, vec!["pkg-b", "root", "pkg-a"]);
     }
 
-    #[test]
-    fn resolve_targets_recursive_includes_root_and_sorted_packages() {
+    #[tokio::test]
+    async fn resolve_targets_recursive_includes_root_and_sorted_packages() {
         let dir = TempDir::new().unwrap();
         setup_workspace_with_package(dir.path(), "test-ws", "zeta");
         fs::create_dir_all(dir.path().join("src").join("alpha")).unwrap();
 
-        let targets = resolve_targets(dir.path(), dir.path(), &[], true).unwrap();
+        let targets = resolve_targets(dir.path(), dir.path(), &[], true)
+            .await
+            .unwrap();
         let labels: Vec<String> = targets.iter().map(|t| t.label()).collect();
         assert_eq!(labels, vec!["root", "alpha", "zeta"]);
     }

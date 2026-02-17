@@ -29,7 +29,7 @@ pub(super) struct ResolveInput {
 /// Resolve an execution plan from inputs.
 ///
 /// This is the core pure function that drives the entire run feature.
-pub(super) fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, RunError> {
+pub(super) async fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, RunError> {
     let command_name = &input.command;
 
     // 1. Check for exec override in buona.json commands
@@ -53,6 +53,7 @@ pub(super) fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, RunErr
             input.cli_system.as_deref(),
             &input.package_dir,
         )
+        .await
         .ok()
         .flatten();
 
@@ -80,7 +81,8 @@ pub(super) fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, RunErr
         input.package_config.as_ref(),
         input.cli_system.as_deref(),
         &input.package_dir,
-    )?;
+    )
+    .await?;
 
     if system.is_none() {
         return Ok(noop_plan(
@@ -140,7 +142,7 @@ pub(super) fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, RunErr
 /// 2. Global system in buona.json (if not "auto")
 /// 3. CLI `--system` (if not "auto")
 /// 4. Auto-detection from marker files
-fn resolve_effective_system(
+async fn resolve_effective_system(
     per_command: Option<BuildSystem>,
     package_config: Option<&BuonaRunConfig>,
     cli_system: Option<&str>,
@@ -166,7 +168,7 @@ fn resolve_effective_system(
     }
 
     // 4. Auto-detect
-    Ok(detect_build_system(package_dir))
+    Ok(detect_build_system(package_dir).await)
 }
 
 fn noop_plan(cwd: PathBuf, system: Option<BuildSystem>, reason: SkipReason) -> ExecutionPlan {
@@ -224,18 +226,18 @@ mod tests {
 
     // ── standard command resolution ──────────────────────────────
 
-    #[test]
-    fn resolves_cargo_test() {
+    #[tokio::test]
+    async fn resolves_cargo_test() {
         let (_dir, input) = input_with_system("test", BuildSystem::Cargo);
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.program.as_deref(), Some("cargo"));
         assert_eq!(plan.args, vec!["test"]);
         assert_eq!(plan.kind, PlanKind::Standard);
         assert_eq!(plan.system, Some(BuildSystem::Cargo));
     }
 
-    #[test]
-    fn resolves_cargo_test_with_extra_args() {
+    #[tokio::test]
+    async fn resolves_cargo_test_with_extra_args() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
         let input = ResolveInput {
@@ -245,15 +247,15 @@ mod tests {
             cli_system: None,
             package_config: None,
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.program.as_deref(), Some("cargo"));
         assert_eq!(plan.args, vec!["test", "--", "--nocapture"]);
     }
 
-    #[test]
-    fn resolves_npm_build() {
+    #[tokio::test]
+    async fn resolves_npm_build() {
         let (_dir, input) = input_with_system("build", BuildSystem::Npm);
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.program.as_deref(), Some("npm"));
         assert_eq!(plan.args, vec!["run", "build"]);
         assert_eq!(plan.kind, PlanKind::Standard);
@@ -261,8 +263,8 @@ mod tests {
 
     // ── proxy command resolution ─────────────────────────────────
 
-    #[test]
-    fn resolves_proxy_for_unknown_command() {
+    #[tokio::test]
+    async fn resolves_proxy_for_unknown_command() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
         let input = ResolveInput {
@@ -272,14 +274,14 @@ mod tests {
             cli_system: None,
             package_config: None,
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.program.as_deref(), Some("cargo"));
         assert_eq!(plan.args, vec!["asm"]);
         assert_eq!(plan.kind, PlanKind::Proxy);
     }
 
-    #[test]
-    fn resolves_npm_proxy_with_run() {
+    #[tokio::test]
+    async fn resolves_npm_proxy_with_run() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("package.json"), "{}").unwrap();
         let input = ResolveInput {
@@ -289,7 +291,7 @@ mod tests {
             cli_system: None,
             package_config: None,
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.program.as_deref(), Some("npm"));
         assert_eq!(plan.args, vec!["run", "my-script"]);
         assert_eq!(plan.kind, PlanKind::Proxy);
@@ -297,8 +299,8 @@ mod tests {
 
     // ── CLI --system override ────────────────────────────────────
 
-    #[test]
-    fn cli_system_override() {
+    #[tokio::test]
+    async fn cli_system_override() {
         let dir = TempDir::new().unwrap();
         // No marker files — rely on CLI override
         let input = ResolveInput {
@@ -308,13 +310,13 @@ mod tests {
             cli_system: Some("cargo".to_string()),
             package_config: None,
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.system, Some(BuildSystem::Cargo));
         assert_eq!(plan.program.as_deref(), Some("cargo"));
     }
 
-    #[test]
-    fn unknown_cli_system_returns_error() {
+    #[tokio::test]
+    async fn unknown_cli_system_returns_error() {
         let dir = TempDir::new().unwrap();
         let input = ResolveInput {
             package_dir: dir.path().to_path_buf(),
@@ -323,7 +325,7 @@ mod tests {
             cli_system: Some("foobar".to_string()),
             package_config: None,
         };
-        let result = resolve_plan(&input);
+        let result = resolve_plan(&input).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             RunError::UnknownSystem(name) => assert_eq!(name, "foobar"),
@@ -333,8 +335,8 @@ mod tests {
 
     // ── buona.json config overrides ──────────────────────────────
 
-    #[test]
-    fn config_global_system_override() {
+    #[tokio::test]
+    async fn config_global_system_override() {
         let dir = TempDir::new().unwrap();
         // No marker files — rely on config
         let config = BuonaRunConfig {
@@ -350,13 +352,13 @@ mod tests {
             cli_system: None,
             package_config: Some(config),
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.system, Some(BuildSystem::Npm));
         assert_eq!(plan.program.as_deref(), Some("npm"));
     }
 
-    #[test]
-    fn config_per_command_system_override() {
+    #[tokio::test]
+    async fn config_per_command_system_override() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
 
@@ -381,14 +383,14 @@ mod tests {
             cli_system: None,
             package_config: Some(config),
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.system, Some(BuildSystem::Make));
         assert_eq!(plan.program.as_deref(), Some("make"));
         assert!(plan.args.is_empty());
     }
 
-    #[test]
-    fn config_exec_override() {
+    #[tokio::test]
+    async fn config_exec_override() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
 
@@ -417,14 +419,14 @@ mod tests {
             cli_system: None,
             package_config: Some(config),
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.kind, PlanKind::ExecOverride);
         assert_eq!(plan.program.as_deref(), Some("pnpm"));
         assert_eq!(plan.args, vec!["run", "custom-test"]);
     }
 
-    #[test]
-    fn empty_exec_override_returns_error() {
+    #[tokio::test]
+    async fn empty_exec_override_returns_error() {
         let dir = TempDir::new().unwrap();
         let mut commands = HashMap::new();
         commands.insert(
@@ -447,7 +449,7 @@ mod tests {
             cli_system: None,
             package_config: Some(config),
         };
-        let result = resolve_plan(&input);
+        let result = resolve_plan(&input).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             RunError::ConfigError(msg) => assert!(msg.contains("empty")),
@@ -457,8 +459,8 @@ mod tests {
 
     // ── precedence tests ─────────────────────────────────────────
 
-    #[test]
-    fn per_command_config_beats_global_config() {
+    #[tokio::test]
+    async fn per_command_config_beats_global_config() {
         let dir = TempDir::new().unwrap();
         let mut commands = HashMap::new();
         commands.insert(
@@ -481,12 +483,12 @@ mod tests {
             cli_system: None,
             package_config: Some(config),
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.system, Some(BuildSystem::Make));
     }
 
-    #[test]
-    fn global_config_beats_cli_system() {
+    #[tokio::test]
+    async fn global_config_beats_cli_system() {
         let dir = TempDir::new().unwrap();
         let config = BuonaRunConfig {
             system: "npm".to_string(),
@@ -501,12 +503,12 @@ mod tests {
             cli_system: Some("cargo".to_string()), // CLI says cargo
             package_config: Some(config),          // config says npm
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.system, Some(BuildSystem::Npm)); // config wins
     }
 
-    #[test]
-    fn cli_system_beats_auto_detect() {
+    #[tokio::test]
+    async fn cli_system_beats_auto_detect() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
 
@@ -517,14 +519,14 @@ mod tests {
             cli_system: Some("npm".to_string()), // CLI says npm
             package_config: None,
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.system, Some(BuildSystem::Npm)); // CLI wins over Cargo.toml
     }
 
     // ── standard not mapped ──────────────────────────────────────
 
-    #[test]
-    fn standard_not_mapped_returns_noop_plan() {
+    #[tokio::test]
+    async fn standard_not_mapped_returns_noop_plan() {
         let dir = TempDir::new().unwrap();
         let input = ResolveInput {
             package_dir: dir.path().to_path_buf(),
@@ -533,7 +535,7 @@ mod tests {
             cli_system: Some("cargo".to_string()),
             package_config: None,
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.kind, PlanKind::Noop);
         assert_eq!(plan.program, None);
         assert_eq!(plan.skip_reason, Some(SkipReason::StandardNotMapped));
@@ -541,8 +543,8 @@ mod tests {
 
     // ── no system detectable ─────────────────────────────────────
 
-    #[test]
-    fn no_system_detectable_returns_noop_plan() {
+    #[tokio::test]
+    async fn no_system_detectable_returns_noop_plan() {
         let dir = TempDir::new().unwrap();
         let input = ResolveInput {
             package_dir: dir.path().to_path_buf(),
@@ -551,7 +553,7 @@ mod tests {
             cli_system: None,
             package_config: None,
         };
-        let plan = resolve_plan(&input).unwrap();
+        let plan = resolve_plan(&input).await.unwrap();
         assert_eq!(plan.kind, PlanKind::Noop);
         assert_eq!(plan.program, None);
         assert_eq!(plan.skip_reason, Some(SkipReason::NoSystemDetected));

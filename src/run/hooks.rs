@@ -51,14 +51,14 @@ fn is_file_executable(_path: &Path) -> bool {
 /// Returns all discovered hook files. The caller is responsible for filtering
 /// by name and checking for ambiguity. Returns an empty vec if the directory
 /// does not exist.
-pub(super) fn scan_hooks_dir(hooks_dir: &Path) -> Vec<HookFile> {
-    let entries = match std::fs::read_dir(hooks_dir) {
+pub(super) async fn scan_hooks_dir(hooks_dir: &Path) -> Vec<HookFile> {
+    let mut entries = match tokio::fs::read_dir(hooks_dir).await {
         Ok(entries) => entries,
         Err(_) => return Vec::new(),
     };
 
     let mut results = Vec::new();
-    for entry in entries.flatten() {
+    while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -702,23 +702,23 @@ mod tests {
 
     // ── scan_hooks_dir (filesystem) ─────────────────────────────────
 
-    #[test]
-    fn scan_nonexistent_dir_returns_empty() {
+    #[tokio::test]
+    async fn scan_nonexistent_dir_returns_empty() {
         let dir = TempDir::new().unwrap();
         let hooks_dir = dir.path().join(".buona/hooks");
-        assert!(scan_hooks_dir(&hooks_dir).is_empty());
+        assert!(scan_hooks_dir(&hooks_dir).await.is_empty());
     }
 
-    #[test]
-    fn scan_empty_dir_returns_empty() {
+    #[tokio::test]
+    async fn scan_empty_dir_returns_empty() {
         let dir = TempDir::new().unwrap();
         let hooks_dir = dir.path().join("hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
-        assert!(scan_hooks_dir(&hooks_dir).is_empty());
+        assert!(scan_hooks_dir(&hooks_dir).await.is_empty());
     }
 
-    #[test]
-    fn scan_finds_hook_files_by_stem() {
+    #[tokio::test]
+    async fn scan_finds_hook_files_by_stem() {
         let dir = TempDir::new().unwrap();
         let hooks_dir = dir.path().join("hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
@@ -733,14 +733,14 @@ mod tests {
             .unwrap();
         }
 
-        let results = scan_hooks_dir(&hooks_dir);
+        let results = scan_hooks_dir(&hooks_dir).await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "prebuild");
         assert!(results[0].executable);
     }
 
-    #[test]
-    fn scan_detects_non_executable_files() {
+    #[tokio::test]
+    async fn scan_detects_non_executable_files() {
         let dir = TempDir::new().unwrap();
         let hooks_dir = dir.path().join("hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
@@ -755,37 +755,37 @@ mod tests {
             .unwrap();
         }
 
-        let results = scan_hooks_dir(&hooks_dir);
+        let results = scan_hooks_dir(&hooks_dir).await;
         assert_eq!(results.len(), 1);
         #[cfg(unix)]
         assert!(!results[0].executable);
     }
 
-    #[test]
-    fn scan_ignores_directories() {
+    #[tokio::test]
+    async fn scan_ignores_directories() {
         let dir = TempDir::new().unwrap();
         let hooks_dir = dir.path().join("hooks");
         std::fs::create_dir_all(hooks_dir.join("prebuild")).unwrap();
 
-        let results = scan_hooks_dir(&hooks_dir);
+        let results = scan_hooks_dir(&hooks_dir).await;
         assert!(results.is_empty());
     }
 
-    #[test]
-    fn scan_finds_multiple_files_for_same_stem() {
+    #[tokio::test]
+    async fn scan_finds_multiple_files_for_same_stem() {
         let dir = TempDir::new().unwrap();
         let hooks_dir = dir.path().join("hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
         std::fs::write(hooks_dir.join("prebuild.sh"), "#!/bin/sh\n").unwrap();
         std::fs::write(hooks_dir.join("prebuild.py"), "#!/usr/bin/env python\n").unwrap();
 
-        let results = scan_hooks_dir(&hooks_dir);
+        let results = scan_hooks_dir(&hooks_dir).await;
         let prebuild_count = results.iter().filter(|f| f.name == "prebuild").count();
         assert_eq!(prebuild_count, 2);
     }
 
-    #[test]
-    fn scan_finds_extensionless_files() {
+    #[tokio::test]
+    async fn scan_finds_extensionless_files() {
         let dir = TempDir::new().unwrap();
         let hooks_dir = dir.path().join("hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
@@ -800,7 +800,7 @@ mod tests {
             .unwrap();
         }
 
-        let results = scan_hooks_dir(&hooks_dir);
+        let results = scan_hooks_dir(&hooks_dir).await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "prebuild");
     }

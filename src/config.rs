@@ -4,7 +4,6 @@
 //! at `~/.config/buona/config.json`.
 
 use std::fmt;
-use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -171,8 +170,8 @@ pub(crate) fn expand_tilde(path: &str) -> Result<PathBuf> {
 }
 
 /// Resolve the workspace directory from the config, expanding `~`.
-pub(crate) fn workspace_dir() -> Result<PathBuf> {
-    let cfg = load_config()?;
+pub(crate) async fn workspace_dir() -> Result<PathBuf> {
+    let cfg = load_config().await?;
     expand_tilde(&cfg.workspace_dir)
 }
 
@@ -188,38 +187,40 @@ pub(crate) fn config_file_path() -> Result<PathBuf> {
 }
 
 /// Load the config from disk. If the file doesn't exist, returns the default config.
-pub(crate) fn load_config() -> Result<BuonaConfig> {
+pub(crate) async fn load_config() -> Result<BuonaConfig> {
     let path = config_file_path()?;
-    if path.exists() {
-        let contents = fs::read_to_string(&path)
-            .with_context(|| format!("could not read config file: {}", path.display()))?;
-        let config: BuonaConfig = serde_json::from_str(&contents)
-            .with_context(|| format!("could not parse config file: {}", path.display()))?;
-        Ok(config)
-    } else {
-        Ok(BuonaConfig::default())
+    match tokio::fs::read_to_string(&path).await {
+        Ok(contents) => {
+            let config: BuonaConfig = serde_json::from_str(&contents)
+                .with_context(|| format!("could not parse config file: {}", path.display()))?;
+            Ok(config)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BuonaConfig::default()),
+        Err(e) => Err(e).with_context(|| format!("could not read config file: {}", path.display())),
     }
 }
 
 /// Save the config to disk, creating parent directories if needed.
-pub(crate) fn save_config(config: &BuonaConfig) -> Result<()> {
+pub(crate) async fn save_config(config: &BuonaConfig) -> Result<()> {
     let path = config_file_path()?;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
+        tokio::fs::create_dir_all(parent)
+            .await
             .with_context(|| format!("could not create config directory: {}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(config)?;
-    fs::write(&path, json + "\n")
+    tokio::fs::write(&path, json + "\n")
+        .await
         .with_context(|| format!("could not write config file: {}", path.display()))?;
     Ok(())
 }
 
 /// Pretty-print the current configuration to the terminal.
-pub(crate) fn print_pretty(config: &BuonaConfig) -> Result<()> {
+pub(crate) async fn print_pretty(config: &BuonaConfig) -> Result<()> {
     let s = Styles::default();
 
     let path = config_file_path()?;
-    let file_exists = path.exists();
+    let file_exists = tokio::fs::try_exists(&path).await.unwrap_or(false);
 
     println!();
     println!("  {}", s.bold.apply_to("Buona Configuration"));
@@ -283,8 +284,8 @@ pub(crate) fn print_json(config: &BuonaConfig) -> Result<()> {
 }
 
 /// Run the interactive setup wizard.
-pub(crate) fn run_setup() -> Result<()> {
-    let current = load_config()?;
+pub(crate) async fn run_setup() -> Result<()> {
+    let current = load_config().await?;
     let s = Styles::default();
 
     println!();
@@ -369,7 +370,7 @@ pub(crate) fn run_setup() -> Result<()> {
         },
     };
 
-    save_config(&config)?;
+    save_config(&config).await?;
 
     println!();
     println!(

@@ -5,7 +5,6 @@
 //! `buona run` resolves commands for that package.
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -86,9 +85,9 @@ pub(super) const PACKAGE_CONFIG_FILE: &str = "buona.json";
 ///
 /// Returns `Ok(None)` if `buona.json` does not exist.
 /// Returns `Err` if it exists but is malformed.
-pub(super) fn load_package_config(dir: &Path) -> Result<Option<BuonaRunConfig>> {
+pub(super) async fn load_package_config(dir: &Path) -> Result<Option<BuonaRunConfig>> {
     let path = dir.join(PACKAGE_CONFIG_FILE);
-    match fs::read_to_string(&path) {
+    match tokio::fs::read_to_string(&path).await {
         Ok(contents) => {
             let config: BuonaRunConfig = serde_json::from_str(&contents)
                 .with_context(|| format!("invalid {} in {}", PACKAGE_CONFIG_FILE, dir.display()))?;
@@ -110,31 +109,31 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[test]
-    fn load_missing_config_returns_none() {
+    #[tokio::test]
+    async fn load_missing_config_returns_none() {
         let dir = TempDir::new().unwrap();
-        let result = load_package_config(dir.path()).unwrap();
+        let result = load_package_config(dir.path()).await.unwrap();
         assert!(result.is_none());
     }
 
-    #[test]
-    fn load_valid_config_with_system() {
+    #[tokio::test]
+    async fn load_valid_config_with_system() {
         let dir = TempDir::new().unwrap();
-        fs::write(
+        std::fs::write(
             dir.path().join(PACKAGE_CONFIG_FILE),
             r#"{ "system": "cargo" }"#,
         )
         .unwrap();
 
-        let config = load_package_config(dir.path()).unwrap().unwrap();
+        let config = load_package_config(dir.path()).await.unwrap().unwrap();
         assert_eq!(config.system, "cargo");
         assert!(config.commands.is_empty());
     }
 
-    #[test]
-    fn load_valid_config_with_commands() {
+    #[tokio::test]
+    async fn load_valid_config_with_commands() {
         let dir = TempDir::new().unwrap();
-        fs::write(
+        std::fs::write(
             dir.path().join(PACKAGE_CONFIG_FILE),
             r#"{
                 "system": "auto",
@@ -146,7 +145,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = load_package_config(dir.path()).unwrap().unwrap();
+        let config = load_package_config(dir.path()).await.unwrap().unwrap();
         assert_eq!(config.system, "auto");
         assert_eq!(config.commands.len(), 2);
 
@@ -159,42 +158,42 @@ mod tests {
         assert_eq!(test.exec.as_ref().unwrap(), &["pnpm", "run", "custom-test"]);
     }
 
-    #[test]
-    fn load_defaults_system_to_auto() {
+    #[tokio::test]
+    async fn load_defaults_system_to_auto() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join(PACKAGE_CONFIG_FILE), r#"{}"#).unwrap();
+        std::fs::write(dir.path().join(PACKAGE_CONFIG_FILE), r#"{}"#).unwrap();
 
-        let config = load_package_config(dir.path()).unwrap().unwrap();
+        let config = load_package_config(dir.path()).await.unwrap().unwrap();
         assert_eq!(config.system, "auto");
     }
 
-    #[test]
-    fn load_defaults_hooks_dir() {
+    #[tokio::test]
+    async fn load_defaults_hooks_dir() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join(PACKAGE_CONFIG_FILE), r#"{}"#).unwrap();
+        std::fs::write(dir.path().join(PACKAGE_CONFIG_FILE), r#"{}"#).unwrap();
 
-        let config = load_package_config(dir.path()).unwrap().unwrap();
+        let config = load_package_config(dir.path()).await.unwrap().unwrap();
         assert_eq!(config.hooks_dir, ".buona/hooks");
         assert!(config.hooks.is_empty());
     }
 
-    #[test]
-    fn load_config_with_hooks_dir() {
+    #[tokio::test]
+    async fn load_config_with_hooks_dir() {
         let dir = TempDir::new().unwrap();
-        fs::write(
+        std::fs::write(
             dir.path().join(PACKAGE_CONFIG_FILE),
             r#"{ "hooksDir": ".custom/hooks" }"#,
         )
         .unwrap();
 
-        let config = load_package_config(dir.path()).unwrap().unwrap();
+        let config = load_package_config(dir.path()).await.unwrap().unwrap();
         assert_eq!(config.hooks_dir, ".custom/hooks");
     }
 
-    #[test]
-    fn load_config_with_hooks() {
+    #[tokio::test]
+    async fn load_config_with_hooks() {
         let dir = TempDir::new().unwrap();
-        fs::write(
+        std::fs::write(
             dir.path().join(PACKAGE_CONFIG_FILE),
             r#"{
                 "hooks": {
@@ -205,7 +204,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = load_package_config(dir.path()).unwrap().unwrap();
+        let config = load_package_config(dir.path()).await.unwrap().unwrap();
         assert_eq!(config.hooks.len(), 2);
         assert_eq!(
             config.hooks["prebuild"],
@@ -217,10 +216,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn load_config_with_hook_argv() {
+    #[tokio::test]
+    async fn load_config_with_hook_argv() {
         let dir = TempDir::new().unwrap();
-        fs::write(
+        std::fs::write(
             dir.path().join(PACKAGE_CONFIG_FILE),
             r#"{
                 "hooks": {
@@ -230,7 +229,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = load_package_config(dir.path()).unwrap().unwrap();
+        let config = load_package_config(dir.path()).await.unwrap().unwrap();
         assert_eq!(
             config.hooks["prebuild"],
             HookValue::Argv(vec![
@@ -241,27 +240,27 @@ mod tests {
         );
     }
 
-    #[test]
-    fn existing_config_still_deserializes_with_new_fields() {
+    #[tokio::test]
+    async fn existing_config_still_deserializes_with_new_fields() {
         let dir = TempDir::new().unwrap();
-        fs::write(
+        std::fs::write(
             dir.path().join(PACKAGE_CONFIG_FILE),
             r#"{ "system": "cargo", "commands": { "build": { "system": "make" } } }"#,
         )
         .unwrap();
 
-        let config = load_package_config(dir.path()).unwrap().unwrap();
+        let config = load_package_config(dir.path()).await.unwrap().unwrap();
         assert_eq!(config.system, "cargo");
         assert_eq!(config.hooks_dir, ".buona/hooks");
         assert!(config.hooks.is_empty());
     }
 
-    #[test]
-    fn load_malformed_config_returns_error() {
+    #[tokio::test]
+    async fn load_malformed_config_returns_error() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join(PACKAGE_CONFIG_FILE), "not valid json {{{").unwrap();
+        std::fs::write(dir.path().join(PACKAGE_CONFIG_FILE), "not valid json {{{").unwrap();
 
-        let result = load_package_config(dir.path());
+        let result = load_package_config(dir.path()).await;
         assert!(result.is_err());
     }
 }

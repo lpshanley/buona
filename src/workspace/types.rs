@@ -1,6 +1,5 @@
 //! Domain types for workspace metadata.
 
-use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -24,9 +23,9 @@ pub(crate) struct WorkspaceMeta {
 ///
 /// Returns `Ok(None)` when the file is simply absent, and `Err` when the file
 /// exists but cannot be read or parsed.
-pub(crate) fn read_meta(dir: &Path) -> Result<Option<WorkspaceMeta>> {
+pub(crate) async fn read_meta(dir: &Path) -> Result<Option<WorkspaceMeta>> {
     let path = dir.join(WORKSPACE_FILE);
-    match fs::read_to_string(&path) {
+    match tokio::fs::read_to_string(&path).await {
         Ok(contents) => {
             let meta = serde_json::from_str(&contents)
                 .with_context(|| format!("invalid {WORKSPACE_FILE} in {}", dir.display()))?;
@@ -40,10 +39,11 @@ pub(crate) fn read_meta(dir: &Path) -> Result<Option<WorkspaceMeta>> {
 }
 
 /// Write workspace metadata to the given directory.
-pub(super) fn write_meta(dir: &Path, meta: &WorkspaceMeta) -> Result<()> {
+pub(super) async fn write_meta(dir: &Path, meta: &WorkspaceMeta) -> Result<()> {
     let meta_path = dir.join(WORKSPACE_FILE);
     let json = serde_json::to_string_pretty(meta)?;
-    fs::write(&meta_path, json + "\n")
+    tokio::fs::write(&meta_path, json + "\n")
+        .await
         .with_context(|| format!("could not write {WORKSPACE_FILE}"))?;
     Ok(())
 }
@@ -96,38 +96,38 @@ mod tests {
         assert!(!json.contains("git_tracking"));
     }
 
-    #[test]
-    fn read_meta_returns_some_for_valid_workspace() {
+    #[tokio::test]
+    async fn read_meta_returns_some_for_valid_workspace() {
         let dir = TempDir::new().unwrap();
         let meta = WorkspaceMeta {
             name: "test-workspace".to_string(),
             git_tracking: None,
         };
         let json = serde_json::to_string_pretty(&meta).unwrap();
-        fs::write(dir.path().join(WORKSPACE_FILE), json).unwrap();
+        std::fs::write(dir.path().join(WORKSPACE_FILE), json).unwrap();
 
-        let result = read_meta(dir.path()).unwrap();
+        let result = read_meta(dir.path()).await.unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().name, "test-workspace");
     }
 
-    #[test]
-    fn read_meta_returns_none_for_missing_file() {
+    #[tokio::test]
+    async fn read_meta_returns_none_for_missing_file() {
         let dir = TempDir::new().unwrap();
-        let result = read_meta(dir.path()).unwrap();
+        let result = read_meta(dir.path()).await.unwrap();
         assert!(result.is_none());
     }
 
-    #[test]
-    fn write_meta_creates_file() {
+    #[tokio::test]
+    async fn write_meta_creates_file() {
         let dir = TempDir::new().unwrap();
         let meta = WorkspaceMeta {
             name: "test".to_string(),
             git_tracking: None,
         };
-        write_meta(dir.path(), &meta).unwrap();
+        write_meta(dir.path(), &meta).await.unwrap();
 
-        let result = read_meta(dir.path()).unwrap().unwrap();
+        let result = read_meta(dir.path()).await.unwrap().unwrap();
         assert_eq!(result.name, "test");
     }
 }

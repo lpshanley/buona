@@ -1,12 +1,11 @@
 //! Workspace operations — list, create, delete, add, remove, sync, adopt, and open.
 
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use dialoguer::Confirm;
+use tokio::process::Command;
 
 use crate::config;
 use crate::config::GitTracking;
@@ -25,28 +24,27 @@ fn resolve_git_tracking(meta: &WorkspaceMeta, cfg: &config::BuonaConfig) -> GitT
 }
 
 /// Find a workspace by name or directory name. Returns the resolved path.
-fn find_workspace(query: &str) -> Result<PathBuf> {
-    let workspace_dir = config::workspace_dir()?;
+async fn find_workspace(query: &str) -> Result<PathBuf> {
+    let workspace_dir = config::workspace_dir().await?;
 
     // First, try as a direct directory name
     let direct = workspace_dir.join(query);
-    if direct.is_dir() && read_meta(&direct)?.is_some() {
+    if direct.is_dir() && read_meta(&direct).await?.is_some() {
         return Ok(direct);
     }
 
     // Otherwise, search by workspace name in metadata
-    let entries = fs::read_dir(&workspace_dir).with_context(|| {
+    let mut entries = tokio::fs::read_dir(&workspace_dir).await.with_context(|| {
         format!(
             "could not read workspace directory: {}",
             workspace_dir.display()
         )
     })?;
 
-    for entry in entries {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
+    while let Some(entry) = entries.next_entry().await? {
+        if entry.file_type().await?.is_dir() {
             let path = entry.path();
-            if let Some(meta) = read_meta(&path)?
+            if let Some(meta) = read_meta(&path).await?
                 && meta.name == query
             {
                 return Ok(path);
@@ -59,10 +57,13 @@ fn find_workspace(query: &str) -> Result<PathBuf> {
 
 /// Walk up from the given directory looking for a `buona.workspace.json` file.
 /// Returns the directory containing the workspace file.
-pub(crate) fn find_workspace_root(start: &Path) -> Result<PathBuf> {
+pub(crate) async fn find_workspace_root(start: &Path) -> Result<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
-        if dir.join(WORKSPACE_FILE).exists() {
+        if tokio::fs::try_exists(dir.join(WORKSPACE_FILE))
+            .await
+            .unwrap_or(false)
+        {
             return Ok(dir);
         }
         if !dir.pop() {
@@ -76,19 +77,19 @@ pub(crate) fn find_workspace_root(start: &Path) -> Result<PathBuf> {
 }
 
 /// Find the workspace root from the current working directory.
-fn find_workspace_from_cwd() -> Result<PathBuf> {
+async fn find_workspace_from_cwd() -> Result<PathBuf> {
     let cwd = env::current_dir().context("could not determine current directory")?;
-    find_workspace_root(&cwd)
+    find_workspace_root(&cwd).await
 }
 
 /// Resolve workspace root from an optional workspace selector.
 ///
 /// If a selector is provided, lookup by name/directory. Otherwise, detect from
 /// current working directory.
-fn resolve_workspace_target(workspace: Option<&str>) -> Result<PathBuf> {
+async fn resolve_workspace_target(workspace: Option<&str>) -> Result<PathBuf> {
     match workspace {
-        Some(name) => find_workspace(name),
-        None => find_workspace_from_cwd(),
+        Some(name) => find_workspace(name).await,
+        None => find_workspace_from_cwd().await,
     }
 }
 
@@ -96,17 +97,17 @@ fn resolve_workspace_target(workspace: Option<&str>) -> Result<PathBuf> {
 ///
 /// Each subdirectory of `src/` is treated as a package. Returns an empty vec
 /// if the `src/` directory does not exist.
-fn list_packages(ws_root: &Path) -> Result<Vec<String>> {
+async fn list_packages(ws_root: &Path) -> Result<Vec<String>> {
     let src_dir = ws_root.join("src");
     if !src_dir.exists() {
         return Ok(Vec::new());
     }
     let mut names: Vec<String> = Vec::new();
-    for entry in fs::read_dir(&src_dir)
-        .with_context(|| format!("could not read src directory: {}", src_dir.display()))?
-    {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
+    let mut entries = tokio::fs::read_dir(&src_dir)
+        .await
+        .with_context(|| format!("could not read src directory: {}", src_dir.display()))?;
+    while let Some(entry) = entries.next_entry().await? {
+        if entry.file_type().await?.is_dir() {
             names.push(entry.file_name().to_string_lossy().into_owned());
         }
     }
@@ -118,21 +119,21 @@ fn list_packages(ws_root: &Path) -> Result<Vec<String>> {
 ///
 /// Returns the URL string on success, or an empty string if the directory is
 /// not a git repo or has no `origin` remote.
-fn detect_git_remote_url(dir: &Path) -> String {
-    git_ops::detect_remote_url(dir)
+async fn detect_git_remote_url(dir: &Path) -> String {
+    git_ops::detect_remote_url(dir).await
 }
 
 /// Detect the current git branch for a directory.
 ///
 /// Returns the branch name on success, or an empty string if the directory is
 /// not a git repo or HEAD is detached.
-fn detect_git_branch(dir: &Path) -> String {
-    git_ops::detect_branch(dir)
+async fn detect_git_branch(dir: &Path) -> String {
+    git_ops::detect_branch(dir).await
 }
 
 /// List all workspaces (directories) found in the configured workspace directory.
-pub(crate) fn list() -> Result<()> {
-    let workspace_dir = config::workspace_dir()?;
+pub(crate) async fn list() -> Result<()> {
+    let workspace_dir = config::workspace_dir().await?;
     let s = Styles::default();
 
     println!();
@@ -147,7 +148,7 @@ pub(crate) fn list() -> Result<()> {
         );
     }
 
-    let entries = fs::read_dir(&workspace_dir).with_context(|| {
+    let mut entries = tokio::fs::read_dir(&workspace_dir).await.with_context(|| {
         format!(
             "could not read workspace directory: {}",
             workspace_dir.display()
@@ -155,11 +156,10 @@ pub(crate) fn list() -> Result<()> {
     })?;
 
     let mut workspaces: Vec<(String, WorkspaceMeta)> = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
+    while let Some(entry) = entries.next_entry().await? {
+        if entry.file_type().await?.is_dir() {
             let dir_name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(meta) = read_meta(&entry.path())? {
+            if let Some(meta) = read_meta(&entry.path()).await? {
                 workspaces.push((dir_name, meta));
             }
         }
@@ -206,7 +206,7 @@ pub(crate) fn list() -> Result<()> {
 ///
 /// After creation, if `packages` is provided, they are cloned into the workspace.
 /// If `open_ws` is true, the workspace is opened in the configured editor.
-pub(crate) fn create(
+pub(crate) async fn create(
     path: &Path,
     name: Option<&str>,
     packages: Option<&[String]>,
@@ -219,7 +219,7 @@ pub(crate) fn create(
     let target: PathBuf = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        config::workspace_dir()?.join(path)
+        config::workspace_dir().await?.join(path)
     };
 
     // Derive the workspace name
@@ -237,30 +237,33 @@ pub(crate) fn create(
     }
 
     // Create the workspace directory (and any parent directories)
-    fs::create_dir_all(&target)
+    tokio::fs::create_dir_all(&target)
+        .await
         .with_context(|| format!("could not create workspace directory: {}", target.display()))?;
 
     // Create the src/ directory for packages
-    fs::create_dir_all(target.join("src")).with_context(|| {
-        format!(
-            "could not create src directory: {}",
-            target.join("src").display()
-        )
-    })?;
+    tokio::fs::create_dir_all(target.join("src"))
+        .await
+        .with_context(|| {
+            format!(
+                "could not create src directory: {}",
+                target.join("src").display()
+            )
+        })?;
 
     // Write the workspace metadata file
     let meta = WorkspaceMeta {
         name: ws_name,
         git_tracking,
     };
-    write_meta(&target, &meta)?;
+    write_meta(&target, &meta).await?;
 
     // Initialize git at workspace root if workspace-level tracking is active
-    let cfg = config::load_config()?;
+    let cfg = config::load_config().await?;
     let tracking = resolve_git_tracking(&meta, &cfg);
 
     if tracking == GitTracking::Workspace {
-        let output = git_ops::init_repo(&target)?;
+        let output = git_ops::init_repo(&target).await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -274,7 +277,7 @@ pub(crate) fn create(
     }
 
     // Auto-sync the .code-workspace file
-    sync_workspace_file(&target, &meta)?;
+    sync_workspace_file(&target, &meta).await?;
 
     println!();
     println!(
@@ -288,12 +291,12 @@ pub(crate) fn create(
     if let Some(pkgs) = packages
         && !pkgs.is_empty()
     {
-        add_packages_to_workspace(&target, pkgs)?;
+        add_packages_to_workspace(&target, pkgs).await?;
     }
 
     // Open workspace in editor if requested
     if open_ws {
-        open_workspace_at(&target)?;
+        open_workspace_at(&target).await?;
     }
 
     println!();
@@ -302,12 +305,12 @@ pub(crate) fn create(
 
 /// Delete a workspace by name or directory name. Prompts for confirmation
 /// unless `force` is true.
-pub(crate) fn delete(query: &str, force: bool) -> Result<()> {
+pub(crate) async fn delete(query: &str, force: bool) -> Result<()> {
     let s = Styles::default();
 
-    let target = find_workspace(query)?;
+    let target = find_workspace(query).await?;
 
-    let meta = read_meta(&target)?;
+    let meta = read_meta(&target).await?;
     let display_name = meta.as_ref().map(|m| m.name.as_str()).unwrap_or(query);
 
     if !force {
@@ -329,7 +332,8 @@ pub(crate) fn delete(query: &str, force: bool) -> Result<()> {
         }
     }
 
-    fs::remove_dir_all(&target)
+    tokio::fs::remove_dir_all(&target)
+        .await
         .with_context(|| format!("could not delete workspace directory: {}", target.display()))?;
 
     println!();
@@ -346,11 +350,12 @@ pub(crate) fn delete(query: &str, force: bool) -> Result<()> {
 /// Add packages to a specific workspace root.
 ///
 /// Internal helper that adds packages to `src/` without resolving workspace by name.
-fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> {
+async fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> {
     let s = Styles::default();
-    let cfg = config::load_config()?;
+    let cfg = config::load_config().await?;
 
-    let meta = read_meta(ws_root)?
+    let meta = read_meta(ws_root)
+        .await?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
     let tracking = resolve_git_tracking(&meta, &cfg);
@@ -386,7 +391,8 @@ fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> 
         }
 
         // Ensure src/ directory exists
-        fs::create_dir_all(&src_dir)
+        tokio::fs::create_dir_all(&src_dir)
+            .await
             .with_context(|| format!("could not create src directory: {}", src_dir.display()))?;
 
         println!(
@@ -395,19 +401,21 @@ fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> 
             s.cyan.apply_to(&resolved.name)
         );
 
-        let output = git_ops::clone_into(&resolved.url, &dest)?;
+        let output = git_ops::clone_into(&resolved.url, &dest).await?;
 
         if output.status.success() {
             // If workspace-level tracking, remove the package's .git directory
             if tracking == GitTracking::Workspace {
                 let pkg_git_dir = dest.join(".git");
                 if pkg_git_dir.exists() {
-                    fs::remove_dir_all(&pkg_git_dir).with_context(|| {
-                        format!(
-                            "could not remove .git directory from cloned package: {}",
-                            pkg_git_dir.display()
-                        )
-                    })?;
+                    tokio::fs::remove_dir_all(&pkg_git_dir)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "could not remove .git directory from cloned package: {}",
+                                pkg_git_dir.display()
+                            )
+                        })?;
                 }
             }
 
@@ -427,7 +435,7 @@ fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> 
 
     // Re-sync the .code-workspace file (picks up newly cloned directories)
     if !successes.is_empty() {
-        sync_workspace_file(ws_root, &meta)?;
+        sync_workspace_file(ws_root, &meta).await?;
     }
 
     // Print summary
@@ -459,14 +467,15 @@ fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> 
 /// Open a workspace at a specific root in the configured editor.
 ///
 /// Internal helper that opens the workspace without resolving by name.
-fn open_workspace_at(ws_root: &Path) -> Result<()> {
+async fn open_workspace_at(ws_root: &Path) -> Result<()> {
     let s = Styles::default();
-    let cfg = config::load_config()?;
+    let cfg = config::load_config().await?;
 
-    let meta = read_meta(ws_root)?
+    let meta = read_meta(ws_root)
+        .await?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
-    let ws_file_path = sync_workspace_file(ws_root, &meta)?;
+    let ws_file_path = sync_workspace_file(ws_root, &meta).await?;
 
     let ide_cmd = cfg.ide.command();
 
@@ -479,6 +488,7 @@ fn open_workspace_at(ws_root: &Path) -> Result<()> {
     let status = Command::new(ide_cmd)
         .arg(&ws_file_path)
         .status()
+        .await
         .with_context(|| {
             format!(
                 "failed to launch {ide_cmd} — is {} installed and on your PATH?",
@@ -509,10 +519,10 @@ fn open_workspace_at(ws_root: &Path) -> Result<()> {
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
-pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
-    let ws_root = resolve_workspace_target(workspace)?;
+pub(crate) async fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
+    let ws_root = resolve_workspace_target(workspace).await?;
 
-    add_packages_to_workspace(&ws_root, packages)
+    add_packages_to_workspace(&ws_root, packages).await
 }
 
 /// Remove one or more packages from a workspace.
@@ -522,20 +532,21 @@ pub(crate) fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
-pub(crate) fn remove_packages(
+pub(crate) async fn remove_packages(
     packages: &[String],
     workspace: Option<&str>,
     force: bool,
 ) -> Result<()> {
     let s = Styles::default();
 
-    let ws_root = resolve_workspace_target(workspace)?;
+    let ws_root = resolve_workspace_target(workspace).await?;
 
-    let meta = read_meta(&ws_root)?
+    let meta = read_meta(&ws_root)
+        .await?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
     let src_dir = ws_root.join("src");
-    let known_packages = list_packages(&ws_root)?;
+    let known_packages = list_packages(&ws_root).await?;
 
     // Partition packages into found and not-found
     let mut to_remove: Vec<&str> = Vec::new();
@@ -623,7 +634,7 @@ pub(crate) fn remove_packages(
         let pkg_dir = src_dir.join(name);
 
         if pkg_dir.exists()
-            && let Err(e) = fs::remove_dir_all(&pkg_dir)
+            && let Err(e) = tokio::fs::remove_dir_all(&pkg_dir).await
         {
             dir_errors.push((name.to_string(), format!("{e}")));
             println!(
@@ -640,7 +651,7 @@ pub(crate) fn remove_packages(
 
     // Re-sync the .code-workspace file
     if !removed.is_empty() {
-        sync_workspace_file(&ws_root, &meta)?;
+        sync_workspace_file(&ws_root, &meta).await?;
     }
 
     // Print summary
@@ -683,7 +694,7 @@ pub(crate) fn remove_packages(
 /// Derives the folder list by scanning `src/` for subdirectories. Uses
 /// `meta.name` to produce the workspace filename. Returns the path to the
 /// generated file.
-fn sync_workspace_file(ws_root: &Path, meta: &WorkspaceMeta) -> Result<PathBuf> {
+async fn sync_workspace_file(ws_root: &Path, meta: &WorkspaceMeta) -> Result<PathBuf> {
     let sanitized = sanitize_name(&meta.name);
     if sanitized.is_empty() {
         bail!(
@@ -696,7 +707,7 @@ fn sync_workspace_file(ws_root: &Path, meta: &WorkspaceMeta) -> Result<PathBuf> 
     let ws_file_path = ws_root.join(&filename);
 
     // Build folder entries from directories in src/
-    let pkg_names = list_packages(ws_root)?;
+    let pkg_names = list_packages(ws_root).await?;
     let folders: Vec<VscodeWorkspaceFolder> = pkg_names
         .iter()
         .map(|name| VscodeWorkspaceFolder {
@@ -711,7 +722,8 @@ fn sync_workspace_file(ws_root: &Path, meta: &WorkspaceMeta) -> Result<PathBuf> 
     };
 
     let json = serde_json::to_string_pretty(&vscode_ws)?;
-    fs::write(&ws_file_path, json + "\n")
+    tokio::fs::write(&ws_file_path, json + "\n")
+        .await
         .with_context(|| format!("could not write workspace file: {}", ws_file_path.display()))?;
 
     Ok(ws_file_path)
@@ -728,19 +740,20 @@ fn sync_workspace_file(ws_root: &Path, meta: &WorkspaceMeta) -> Result<PathBuf> 
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
-pub(crate) fn sync(
+pub(crate) async fn sync(
     packages: &[String],
     workspace: Option<&str>,
     fetch_only: bool,
 ) -> Result<PathBuf> {
     let s = Styles::default();
 
-    let ws_root = resolve_workspace_target(workspace)?;
+    let ws_root = resolve_workspace_target(workspace).await?;
 
-    let meta = read_meta(&ws_root)?
+    let meta = read_meta(&ws_root)
+        .await?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
-    let cfg = config::load_config()?;
+    let cfg = config::load_config().await?;
     let tracking = resolve_git_tracking(&meta, &cfg);
 
     println!();
@@ -776,7 +789,7 @@ pub(crate) fn sync(
             git_op,
         );
 
-        let output = git_ops::sync_repo(&ws_root, fetch_only)?;
+        let output = git_ops::sync_repo(&ws_root, fetch_only).await?;
 
         if output.status.success() {
             let summary = git_ops::summarize_sync_stdout(&output, fetch_only);
@@ -794,7 +807,7 @@ pub(crate) fn sync(
     } else {
         // Package-level sync: pull/fetch in each package directory
         let src_dir = ws_root.join("src");
-        let known_packages = list_packages(&ws_root)?;
+        let known_packages = list_packages(&ws_root).await?;
 
         // Determine which packages to sync
         let targets: Vec<&str> = if packages.is_empty() {
@@ -836,7 +849,7 @@ pub(crate) fn sync(
                 s.cyan.apply_to(pkg_name)
             );
 
-            let output = git_ops::sync_repo(&pkg_dir, fetch_only)?;
+            let output = git_ops::sync_repo(&pkg_dir, fetch_only).await?;
 
             if output.status.success() {
                 let summary = git_ops::summarize_sync_stdout(&output, fetch_only);
@@ -875,7 +888,7 @@ pub(crate) fn sync(
     }
 
     // Re-sync the .code-workspace file
-    let ws_file_path = sync_workspace_file(&ws_root, &meta)?;
+    let ws_file_path = sync_workspace_file(&ws_root, &meta).await?;
 
     let filename = ws_file_path
         .file_name()
@@ -898,19 +911,20 @@ pub(crate) fn sync(
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
-pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
+pub(crate) async fn info(workspace: Option<&str>, json: bool) -> Result<()> {
     let s = Styles::default();
 
-    let ws_root = resolve_workspace_target(workspace)?;
+    let ws_root = resolve_workspace_target(workspace).await?;
 
-    let meta = read_meta(&ws_root)?
+    let meta = read_meta(&ws_root)
+        .await?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
-    let cfg = config::load_config()?;
+    let cfg = config::load_config().await?;
     let tracking = resolve_git_tracking(&meta, &cfg);
 
     let src_dir = ws_root.join("src");
-    let pkg_names = list_packages(&ws_root)?;
+    let pkg_names = list_packages(&ws_root).await?;
 
     if json {
         let tracking_str = match tracking {
@@ -919,20 +933,18 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
         };
 
         // Build a JSON representation with packages derived from disk
-        let packages_json: Vec<serde_json::Value> = pkg_names
-            .iter()
-            .map(|name| {
-                let pkg_dir = src_dir.join(name);
-                let url = detect_git_remote_url(&pkg_dir);
-                let branch = detect_git_branch(&pkg_dir);
-                serde_json::json!({
-                    "name": name,
-                    "url": if url.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(url) },
-                    "branch": if branch.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(branch) },
-                    "dir": pkg_dir.display().to_string(),
-                })
-            })
-            .collect();
+        let mut packages_json: Vec<serde_json::Value> = Vec::new();
+        for name in &pkg_names {
+            let pkg_dir = src_dir.join(name);
+            let url = detect_git_remote_url(&pkg_dir).await;
+            let branch = detect_git_branch(&pkg_dir).await;
+            packages_json.push(serde_json::json!({
+                "name": name,
+                "url": if url.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(url) },
+                "branch": if branch.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(branch) },
+                "dir": pkg_dir.display().to_string(),
+            }));
+        }
 
         let mut output = serde_json::json!({
             "name": meta.name,
@@ -942,8 +954,8 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
 
         // In workspace mode, add workspace-level git info
         if tracking == GitTracking::Workspace {
-            let ws_url = detect_git_remote_url(&ws_root);
-            let ws_branch = detect_git_branch(&ws_root);
+            let ws_url = detect_git_remote_url(&ws_root).await;
+            let ws_branch = detect_git_branch(&ws_root).await;
             output["git_url"] = if ws_url.is_empty() {
                 serde_json::Value::Null
             } else {
@@ -989,8 +1001,8 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
 
     // In workspace mode, show workspace-level git info
     if tracking == GitTracking::Workspace {
-        let ws_url = detect_git_remote_url(&ws_root);
-        let ws_branch = detect_git_branch(&ws_root);
+        let ws_url = detect_git_remote_url(&ws_root).await;
+        let ws_branch = detect_git_branch(&ws_root).await;
 
         println!();
         println!("  {}", s.bold.apply_to("Workspace Git"));
@@ -1019,8 +1031,8 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
 
             // In package mode, show per-package git info
             if tracking == GitTracking::Package {
-                let url = detect_git_remote_url(&pkg_dir);
-                let branch = detect_git_branch(&pkg_dir);
+                let url = detect_git_remote_url(&pkg_dir).await;
+                let branch = detect_git_branch(&pkg_dir).await;
 
                 if !url.is_empty() {
                     println!("     {}  {}", s.dim.apply_to("url:"), s.dim.apply_to(&url));
@@ -1051,10 +1063,10 @@ pub(crate) fn info(workspace: Option<&str>, json: bool) -> Result<()> {
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
-pub(crate) fn open(workspace: Option<&str>) -> Result<()> {
-    let ws_root = resolve_workspace_target(workspace)?;
+pub(crate) async fn open(workspace: Option<&str>) -> Result<()> {
+    let ws_root = resolve_workspace_target(workspace).await?;
 
-    open_workspace_at(&ws_root)
+    open_workspace_at(&ws_root).await
 }
 
 /// Adopt an existing local directory into the workspace.
@@ -1065,7 +1077,7 @@ pub(crate) fn open(workspace: Option<&str>) -> Result<()> {
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
 /// Otherwise, the workspace is detected from the current working directory.
-pub(crate) fn adopt(
+pub(crate) async fn adopt(
     path: &Path,
     workspace: Option<&str>,
     copy: bool,
@@ -1073,9 +1085,10 @@ pub(crate) fn adopt(
 ) -> Result<()> {
     let s = Styles::default();
 
-    let ws_root = resolve_workspace_target(workspace)?;
+    let ws_root = resolve_workspace_target(workspace).await?;
 
-    let meta = read_meta(&ws_root)?
+    let meta = read_meta(&ws_root)
+        .await?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
     // Resolve and validate the source path
@@ -1131,7 +1144,8 @@ pub(crate) fn adopt(
         );
     } else {
         // Ensure src/ exists
-        fs::create_dir_all(&src_dir)
+        tokio::fs::create_dir_all(&src_dir)
+            .await
             .with_context(|| format!("could not create src directory: {}", src_dir.display()))?;
 
         if dest.exists() {
@@ -1157,6 +1171,7 @@ pub(crate) fn adopt(
                 .arg(&source)
                 .arg(&dest)
                 .status()
+                .await
                 .context("failed to execute cp — is it available on your system?")?;
 
             if !status.success() {
@@ -1170,21 +1185,22 @@ pub(crate) fn adopt(
                 s.dim.apply_to(dest.display().to_string())
             );
 
-            // Try fs::rename first (fast, same-filesystem only)
-            if fs::rename(&source, &dest).is_err() {
+            // Try tokio::fs::rename first (fast, same-filesystem only)
+            if tokio::fs::rename(&source, &dest).await.is_err() {
                 // Fall back to copy + delete for cross-device moves
                 let status = Command::new("cp")
                     .args(["-a"])
                     .arg(&source)
                     .arg(&dest)
                     .status()
+                    .await
                     .context("failed to execute cp — is it available on your system?")?;
 
                 if !status.success() {
                     bail!("cp failed with {status}");
                 }
 
-                fs::remove_dir_all(&source).with_context(|| {
+                tokio::fs::remove_dir_all(&source).await.with_context(|| {
                     format!(
                         "copied to destination but could not remove original: {}",
                         source.display()
@@ -1195,17 +1211,19 @@ pub(crate) fn adopt(
     }
 
     // If workspace-level tracking, remove the adopted package's .git directory
-    let cfg = config::load_config()?;
+    let cfg = config::load_config().await?;
     let tracking = resolve_git_tracking(&meta, &cfg);
     if tracking == GitTracking::Workspace {
         let adopted_git_dir = dest.join(".git");
         if adopted_git_dir.exists() {
-            fs::remove_dir_all(&adopted_git_dir).with_context(|| {
-                format!(
-                    "could not remove .git directory from adopted package: {}",
-                    adopted_git_dir.display()
-                )
-            })?;
+            tokio::fs::remove_dir_all(&adopted_git_dir)
+                .await
+                .with_context(|| {
+                    format!(
+                        "could not remove .git directory from adopted package: {}",
+                        adopted_git_dir.display()
+                    )
+                })?;
             println!(
                 "  {} Removed package-level .git (workspace-level tracking active)",
                 s.dim.apply_to("→"),
@@ -1214,7 +1232,7 @@ pub(crate) fn adopt(
     }
 
     // Sync the .code-workspace file (picks up the new directory in src/)
-    sync_workspace_file(&ws_root, &meta)?;
+    sync_workspace_file(&ws_root, &meta).await?;
 
     println!();
     println!(
@@ -1234,110 +1252,110 @@ mod tests {
     use tempfile::TempDir;
 
     /// Helper: create a workspace directory with metadata and a `src/` dir.
-    fn setup_workspace(dir: &Path, name: &str) {
-        setup_workspace_with_tracking(dir, name, None);
+    async fn setup_workspace(dir: &Path, name: &str) {
+        setup_workspace_with_tracking(dir, name, None).await;
     }
 
     /// Helper: create a workspace with an explicit git tracking mode.
-    fn setup_workspace_with_tracking(dir: &Path, name: &str, tracking: Option<GitTracking>) {
-        fs::create_dir_all(dir.join("src")).unwrap();
+    async fn setup_workspace_with_tracking(dir: &Path, name: &str, tracking: Option<GitTracking>) {
+        std::fs::create_dir_all(dir.join("src")).unwrap();
         let meta = WorkspaceMeta {
             name: name.to_string(),
             git_tracking: tracking,
         };
-        write_meta(dir, &meta).unwrap();
+        write_meta(dir, &meta).await.unwrap();
     }
 
     // ── find_workspace_root tests ────────────────────────────────────
 
-    #[test]
-    fn find_workspace_root_in_workspace_dir() {
+    #[tokio::test]
+    async fn find_workspace_root_in_workspace_dir() {
         let dir = TempDir::new().unwrap();
-        setup_workspace(dir.path(), "test");
+        setup_workspace(dir.path(), "test").await;
 
-        let result = find_workspace_root(dir.path()).unwrap();
+        let result = find_workspace_root(dir.path()).await.unwrap();
         assert_eq!(result, dir.path());
     }
 
-    #[test]
-    fn find_workspace_root_in_child_dir() {
+    #[tokio::test]
+    async fn find_workspace_root_in_child_dir() {
         let dir = TempDir::new().unwrap();
-        setup_workspace(dir.path(), "test");
+        setup_workspace(dir.path(), "test").await;
 
         // Create a child directory and search from there
         let child = dir.path().join("src").join("deep");
-        fs::create_dir_all(&child).unwrap();
+        std::fs::create_dir_all(&child).unwrap();
 
-        let result = find_workspace_root(&child).unwrap();
+        let result = find_workspace_root(&child).await.unwrap();
         assert_eq!(result, dir.path());
     }
 
-    #[test]
-    fn find_workspace_root_fails_when_not_in_workspace() {
+    #[tokio::test]
+    async fn find_workspace_root_fails_when_not_in_workspace() {
         let dir = TempDir::new().unwrap();
-        let result = find_workspace_root(dir.path());
+        let result = find_workspace_root(dir.path()).await;
         assert!(result.is_err());
     }
 
     // ── list_packages tests ─────────────────────────────────────────
 
-    #[test]
-    fn list_packages_returns_sorted_directory_names() {
+    #[tokio::test]
+    async fn list_packages_returns_sorted_directory_names() {
         let dir = TempDir::new().unwrap();
-        setup_workspace(dir.path(), "test");
+        setup_workspace(dir.path(), "test").await;
 
         let src = dir.path().join("src");
-        fs::create_dir_all(src.join("gamma")).unwrap();
-        fs::create_dir_all(src.join("alpha")).unwrap();
-        fs::create_dir_all(src.join("beta")).unwrap();
+        std::fs::create_dir_all(src.join("gamma")).unwrap();
+        std::fs::create_dir_all(src.join("alpha")).unwrap();
+        std::fs::create_dir_all(src.join("beta")).unwrap();
 
-        let names = list_packages(dir.path()).unwrap();
+        let names = list_packages(dir.path()).await.unwrap();
         assert_eq!(names, vec!["alpha", "beta", "gamma"]);
     }
 
-    #[test]
-    fn list_packages_ignores_files_in_src() {
+    #[tokio::test]
+    async fn list_packages_ignores_files_in_src() {
         let dir = TempDir::new().unwrap();
-        setup_workspace(dir.path(), "test");
+        setup_workspace(dir.path(), "test").await;
 
         let src = dir.path().join("src");
-        fs::create_dir_all(src.join("real-pkg")).unwrap();
-        fs::write(src.join("not-a-package.txt"), "hello").unwrap();
+        std::fs::create_dir_all(src.join("real-pkg")).unwrap();
+        std::fs::write(src.join("not-a-package.txt"), "hello").unwrap();
 
-        let names = list_packages(dir.path()).unwrap();
+        let names = list_packages(dir.path()).await.unwrap();
         assert_eq!(names, vec!["real-pkg"]);
     }
 
-    #[test]
-    fn list_packages_returns_empty_when_no_src() {
+    #[tokio::test]
+    async fn list_packages_returns_empty_when_no_src() {
         let dir = TempDir::new().unwrap();
         // No src/ directory at all
         let meta = WorkspaceMeta {
             name: "test".to_string(),
             git_tracking: None,
         };
-        write_meta(dir.path(), &meta).unwrap();
+        write_meta(dir.path(), &meta).await.unwrap();
 
-        let names = list_packages(dir.path()).unwrap();
+        let names = list_packages(dir.path()).await.unwrap();
         assert!(names.is_empty());
     }
 
-    #[test]
-    fn list_packages_returns_empty_when_src_is_empty() {
+    #[tokio::test]
+    async fn list_packages_returns_empty_when_src_is_empty() {
         let dir = TempDir::new().unwrap();
-        setup_workspace(dir.path(), "test");
+        setup_workspace(dir.path(), "test").await;
 
-        let names = list_packages(dir.path()).unwrap();
+        let names = list_packages(dir.path()).await.unwrap();
         assert!(names.is_empty());
     }
 
     // ── detect_git_remote_url tests ─────────────────────────────────
 
-    #[test]
-    fn detect_git_remote_url_finds_origin() {
+    #[tokio::test]
+    async fn detect_git_remote_url_finds_origin() {
         let dir = TempDir::new().unwrap();
         let repo = dir.path().join("git-repo");
-        fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
 
         std::process::Command::new("git")
             .args(["init"])
@@ -1350,27 +1368,27 @@ mod tests {
             .output()
             .unwrap();
 
-        let url = detect_git_remote_url(&repo);
+        let url = detect_git_remote_url(&repo).await;
         assert_eq!(url, "git@github.com:acme/test.git");
     }
 
-    #[test]
-    fn detect_git_remote_url_returns_empty_for_non_git_dir() {
+    #[tokio::test]
+    async fn detect_git_remote_url_returns_empty_for_non_git_dir() {
         let dir = TempDir::new().unwrap();
         let plain = dir.path().join("plain-dir");
-        fs::create_dir_all(&plain).unwrap();
+        std::fs::create_dir_all(&plain).unwrap();
 
-        let url = detect_git_remote_url(&plain);
+        let url = detect_git_remote_url(&plain).await;
         assert!(url.is_empty());
     }
 
     // ── detect_git_branch tests ─────────────────────────────────────
 
-    #[test]
-    fn detect_git_branch_finds_current_branch() {
+    #[tokio::test]
+    async fn detect_git_branch_finds_current_branch() {
         let dir = TempDir::new().unwrap();
         let repo = dir.path().join("git-repo");
-        fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
 
         std::process::Command::new("git")
             .args(["init", "-b", "main"])
@@ -1379,7 +1397,7 @@ mod tests {
             .unwrap();
 
         // HEAD requires at least one commit to resolve
-        fs::write(repo.join("README.md"), "hello").unwrap();
+        std::fs::write(repo.join("README.md"), "hello").unwrap();
         std::process::Command::new("git")
             .args(["add", "."])
             .current_dir(&repo)
@@ -1399,76 +1417,76 @@ mod tests {
             .output()
             .unwrap();
 
-        let branch = detect_git_branch(&repo);
+        let branch = detect_git_branch(&repo).await;
         assert_eq!(branch, "main");
     }
 
-    #[test]
-    fn detect_git_branch_returns_empty_for_non_git_dir() {
+    #[tokio::test]
+    async fn detect_git_branch_returns_empty_for_non_git_dir() {
         let dir = TempDir::new().unwrap();
         let plain = dir.path().join("plain-dir");
-        fs::create_dir_all(&plain).unwrap();
+        std::fs::create_dir_all(&plain).unwrap();
 
-        let branch = detect_git_branch(&plain);
+        let branch = detect_git_branch(&plain).await;
         assert!(branch.is_empty());
     }
 
     // ── remove_packages tests ───────────────────────────────────────
 
-    #[test]
-    fn remove_deletes_directory_from_src() {
+    #[tokio::test]
+    async fn remove_deletes_directory_from_src() {
         let dir = TempDir::new().unwrap();
-        setup_workspace(dir.path(), "test");
+        setup_workspace(dir.path(), "test").await;
 
         let src = dir.path().join("src");
-        fs::create_dir_all(src.join("alpha")).unwrap();
-        fs::create_dir_all(src.join("beta")).unwrap();
-        fs::create_dir_all(src.join("gamma")).unwrap();
+        std::fs::create_dir_all(src.join("alpha")).unwrap();
+        std::fs::create_dir_all(src.join("beta")).unwrap();
+        std::fs::create_dir_all(src.join("gamma")).unwrap();
 
         // Simulate removing "beta": delete its directory
         let pkg_dir = src.join("beta");
-        fs::remove_dir_all(&pkg_dir).unwrap();
+        std::fs::remove_dir_all(&pkg_dir).unwrap();
 
         assert!(!pkg_dir.exists());
-        let remaining = list_packages(dir.path()).unwrap();
+        let remaining = list_packages(dir.path()).await.unwrap();
         assert_eq!(remaining, vec!["alpha", "gamma"]);
     }
 
-    #[test]
-    fn remove_multiple_directories_from_src() {
+    #[tokio::test]
+    async fn remove_multiple_directories_from_src() {
         let dir = TempDir::new().unwrap();
-        setup_workspace(dir.path(), "test");
+        setup_workspace(dir.path(), "test").await;
 
         let src = dir.path().join("src");
-        fs::create_dir_all(src.join("alpha")).unwrap();
-        fs::create_dir_all(src.join("beta")).unwrap();
-        fs::create_dir_all(src.join("gamma")).unwrap();
+        std::fs::create_dir_all(src.join("alpha")).unwrap();
+        std::fs::create_dir_all(src.join("beta")).unwrap();
+        std::fs::create_dir_all(src.join("gamma")).unwrap();
 
         // Remove "alpha" and "gamma"
-        fs::remove_dir_all(src.join("alpha")).unwrap();
-        fs::remove_dir_all(src.join("gamma")).unwrap();
+        std::fs::remove_dir_all(src.join("alpha")).unwrap();
+        std::fs::remove_dir_all(src.join("gamma")).unwrap();
 
-        let remaining = list_packages(dir.path()).unwrap();
+        let remaining = list_packages(dir.path()).await.unwrap();
         assert_eq!(remaining, vec!["beta"]);
     }
 
     // ── sync_workspace_file tests ───────────────────────────────────
 
-    #[test]
-    fn sync_workspace_file_derives_folders_from_src() {
+    #[tokio::test]
+    async fn sync_workspace_file_derives_folders_from_src() {
         let dir = TempDir::new().unwrap();
-        setup_workspace(dir.path(), "my-project");
+        setup_workspace(dir.path(), "my-project").await;
 
         let src = dir.path().join("src");
-        fs::create_dir_all(src.join("toolkit")).unwrap();
-        fs::create_dir_all(src.join("utils")).unwrap();
+        std::fs::create_dir_all(src.join("toolkit")).unwrap();
+        std::fs::create_dir_all(src.join("utils")).unwrap();
 
-        let meta = read_meta(dir.path()).unwrap().unwrap();
-        let ws_file_path = sync_workspace_file(dir.path(), &meta).unwrap();
+        let meta = read_meta(dir.path()).await.unwrap().unwrap();
+        let ws_file_path = sync_workspace_file(dir.path(), &meta).await.unwrap();
 
         assert!(ws_file_path.exists());
 
-        let contents = fs::read_to_string(&ws_file_path).unwrap();
+        let contents = std::fs::read_to_string(&ws_file_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["folders"][0]["path"], "src/toolkit");
         assert_eq!(parsed["folders"][0]["name"], "toolkit");
@@ -1476,31 +1494,31 @@ mod tests {
         assert_eq!(parsed["folders"][1]["name"], "utils");
     }
 
-    #[test]
-    fn sync_workspace_file_empty_src() {
+    #[tokio::test]
+    async fn sync_workspace_file_empty_src() {
         let dir = TempDir::new().unwrap();
-        setup_workspace(dir.path(), "empty-ws");
+        setup_workspace(dir.path(), "empty-ws").await;
 
-        let meta = read_meta(dir.path()).unwrap().unwrap();
-        let ws_file_path = sync_workspace_file(dir.path(), &meta).unwrap();
+        let meta = read_meta(dir.path()).await.unwrap().unwrap();
+        let ws_file_path = sync_workspace_file(dir.path(), &meta).await.unwrap();
 
-        let contents = fs::read_to_string(&ws_file_path).unwrap();
+        let contents = std::fs::read_to_string(&ws_file_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["folders"].as_array().unwrap().len(), 0);
     }
 
     // ── adopt tests ─────────────────────────────────────────────────
 
-    #[test]
-    fn adopt_moves_directory_into_src() {
+    #[tokio::test]
+    async fn adopt_moves_directory_into_src() {
         let ws_dir = TempDir::new().unwrap();
-        setup_workspace(ws_dir.path(), "test-ws");
+        setup_workspace(ws_dir.path(), "test-ws").await;
 
         // Create a source directory outside the workspace
         let outside = TempDir::new().unwrap();
         let source = outside.path().join("my-pkg");
-        fs::create_dir_all(&source).unwrap();
-        fs::write(source.join("hello.txt"), "world").unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("hello.txt"), "world").unwrap();
 
         let source_canonical = source.canonicalize().unwrap();
 
@@ -1509,35 +1527,38 @@ mod tests {
         assert!(!dest.exists());
 
         // Simulate the adopt logic: move source into ws/src/my-pkg
-        if fs::rename(&source_canonical, &dest).is_err() {
+        if std::fs::rename(&source_canonical, &dest).is_err() {
             std::process::Command::new("cp")
                 .args(["-a"])
                 .arg(&source_canonical)
                 .arg(&dest)
                 .status()
                 .unwrap();
-            fs::remove_dir_all(&source_canonical).unwrap();
+            std::fs::remove_dir_all(&source_canonical).unwrap();
         }
 
         // Verify the directory moved
         assert!(dest.join("hello.txt").exists());
-        assert_eq!(fs::read_to_string(dest.join("hello.txt")).unwrap(), "world");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("hello.txt")).unwrap(),
+            "world"
+        );
         assert!(!source.exists(), "original should be gone after move");
 
         // Package is discovered from filesystem
-        let pkgs = list_packages(ws_dir.path()).unwrap();
+        let pkgs = list_packages(ws_dir.path()).await.unwrap();
         assert_eq!(pkgs, vec!["my-pkg"]);
     }
 
-    #[test]
-    fn adopt_copies_when_flag_set() {
+    #[tokio::test]
+    async fn adopt_copies_when_flag_set() {
         let ws_dir = TempDir::new().unwrap();
-        setup_workspace(ws_dir.path(), "test-ws");
+        setup_workspace(ws_dir.path(), "test-ws").await;
 
         let outside = TempDir::new().unwrap();
         let source = outside.path().join("copy-pkg");
-        fs::create_dir_all(&source).unwrap();
-        fs::write(source.join("data.txt"), "keep me").unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("data.txt"), "keep me").unwrap();
 
         let dest = ws_dir.path().join("src").join("copy-pkg");
 
@@ -1553,48 +1574,48 @@ mod tests {
         // Verify destination has the file
         assert!(dest.join("data.txt").exists());
         assert_eq!(
-            fs::read_to_string(dest.join("data.txt")).unwrap(),
+            std::fs::read_to_string(dest.join("data.txt")).unwrap(),
             "keep me"
         );
         // Original still exists
         assert!(source.exists(), "original should still exist after copy");
 
         // Package is discovered from filesystem
-        let pkgs = list_packages(ws_dir.path()).unwrap();
+        let pkgs = list_packages(ws_dir.path()).await.unwrap();
         assert_eq!(pkgs, vec!["copy-pkg"]);
     }
 
-    #[test]
-    fn adopt_registers_already_in_src() {
+    #[tokio::test]
+    async fn adopt_registers_already_in_src() {
         let ws_dir = TempDir::new().unwrap();
-        setup_workspace(ws_dir.path(), "test-ws");
+        setup_workspace(ws_dir.path(), "test-ws").await;
 
         // Place a directory directly in src/
         let pkg_dir = ws_dir.path().join("src").join("existing-pkg");
-        fs::create_dir_all(&pkg_dir).unwrap();
-        fs::write(pkg_dir.join("marker.txt"), "I was here").unwrap();
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("marker.txt"), "I was here").unwrap();
 
         // The package is already discoverable — no move/copy needed
-        let pkgs = list_packages(ws_dir.path()).unwrap();
+        let pkgs = list_packages(ws_dir.path()).await.unwrap();
         assert_eq!(pkgs, vec!["existing-pkg"]);
 
         // File is still intact
         assert_eq!(
-            fs::read_to_string(pkg_dir.join("marker.txt")).unwrap(),
+            std::fs::read_to_string(pkg_dir.join("marker.txt")).unwrap(),
             "I was here"
         );
     }
 
-    #[test]
-    fn adopt_detects_existing_directory_as_conflict() {
+    #[tokio::test]
+    async fn adopt_detects_existing_directory_as_conflict() {
         let ws_dir = TempDir::new().unwrap();
-        setup_workspace(ws_dir.path(), "test-ws");
+        setup_workspace(ws_dir.path(), "test-ws").await;
 
         // Place a directory in src/ with the name "taken"
-        fs::create_dir_all(ws_dir.path().join("src").join("taken")).unwrap();
+        std::fs::create_dir_all(ws_dir.path().join("src").join("taken")).unwrap();
 
         // The package already exists on disk — adopt should detect the conflict
-        let pkgs = list_packages(ws_dir.path()).unwrap();
+        let pkgs = list_packages(ws_dir.path()).await.unwrap();
         assert!(pkgs.contains(&"taken".to_string()));
     }
 
@@ -1609,23 +1630,23 @@ mod tests {
     fn adopt_errors_on_file_path() {
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("not-a-dir.txt");
-        fs::write(&file, "hello").unwrap();
+        std::fs::write(&file, "hello").unwrap();
         assert!(file.exists());
         assert!(!file.is_dir(), "files should be rejected by adopt");
     }
 
     // ── add_packages_to_workspace tests ──────────────────────────────
 
-    #[test]
-    fn add_packages_to_workspace_clones_git_repo() {
+    #[tokio::test]
+    async fn add_packages_to_workspace_clones_git_repo() {
         let ws_dir = TempDir::new().unwrap();
-        setup_workspace(ws_dir.path(), "test-ws");
+        setup_workspace(ws_dir.path(), "test-ws").await;
 
         // Create a mock "remote" git repo
         let remote_dir = TempDir::new().unwrap();
         let remote_repo = remote_dir.path().join("test-pkg");
-        fs::create_dir_all(&remote_repo).unwrap();
-        fs::write(remote_repo.join("README.md"), "test").unwrap();
+        std::fs::create_dir_all(&remote_repo).unwrap();
+        std::fs::write(remote_repo.join("README.md"), "test").unwrap();
 
         // Init git repo and commit the file
         std::process::Command::new("git")
@@ -1656,7 +1677,7 @@ mod tests {
 
         // Clone using full file:// URL
         let url = format!("file://{}", remote_repo.canonicalize().unwrap().display());
-        let result = add_packages_to_workspace(ws_dir.path(), &[url]);
+        let result = add_packages_to_workspace(ws_dir.path(), &[url]).await;
 
         // The clone should succeed
         assert!(result.is_ok());
@@ -1667,24 +1688,24 @@ mod tests {
         assert!(pkg_dir.join("README.md").exists());
 
         // Verify it's discoverable
-        let pkgs = list_packages(ws_dir.path()).unwrap();
+        let pkgs = list_packages(ws_dir.path()).await.unwrap();
         assert!(pkgs.contains(&"test-pkg".to_string()));
     }
 
-    #[test]
-    fn add_packages_to_workspace_errors_when_all_fail() {
+    #[tokio::test]
+    async fn add_packages_to_workspace_errors_when_all_fail() {
         let ws_dir = TempDir::new().unwrap();
-        setup_workspace(ws_dir.path(), "test-ws");
+        setup_workspace(ws_dir.path(), "test-ws").await;
 
         // Pre-create a package directory
         let pkg_dir = ws_dir.path().join("src").join("existing-pkg");
-        fs::create_dir_all(&pkg_dir).unwrap();
-        fs::write(pkg_dir.join("marker.txt"), "original").unwrap();
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("marker.txt"), "original").unwrap();
 
         // Try to add the same package - should fail with "already exists"
         let remote_dir = TempDir::new().unwrap();
         let remote_repo = remote_dir.path().join("existing-pkg");
-        fs::create_dir_all(&remote_repo).unwrap();
+        std::fs::create_dir_all(&remote_repo).unwrap();
         std::process::Command::new("git")
             .args(["init"])
             .current_dir(&remote_repo)
@@ -1692,34 +1713,37 @@ mod tests {
             .unwrap();
 
         let url = format!("file://{}", remote_repo.canonicalize().unwrap().display());
-        let result = add_packages_to_workspace(ws_dir.path(), &[url]);
+        let result = add_packages_to_workspace(ws_dir.path(), &[url]).await;
 
         // Should return an error when all packages fail
         assert!(result.is_err());
 
         // Original file should still be there
         assert_eq!(
-            fs::read_to_string(pkg_dir.join("marker.txt")).unwrap(),
+            std::fs::read_to_string(pkg_dir.join("marker.txt")).unwrap(),
             "original"
         );
     }
 
     // ── open_workspace_at tests ────────────────────────────────────
 
-    #[test]
-    fn open_workspace_at_generates_workspace_file() {
+    #[tokio::test]
+    async fn open_workspace_at_generates_workspace_file() {
         let ws_dir = TempDir::new().unwrap();
-        setup_workspace(ws_dir.path(), "my-workspace");
+        setup_workspace(ws_dir.path(), "my-workspace").await;
 
         // Add a package so there's something in the workspace file
         let src_dir = ws_dir.path().join("src");
-        fs::create_dir_all(src_dir.join("pkg-a")).unwrap();
+        std::fs::create_dir_all(src_dir.join("pkg-a")).unwrap();
 
-        // Call open_workspace_at - this should create the .code-workspace file
+        // Call sync_workspace_file - this should create the .code-workspace file
         // Note: This will fail to actually launch the editor in tests,
         // but we can't easily mock that. We'll test that the file was generated.
-        let result =
-            sync_workspace_file(ws_dir.path(), &read_meta(ws_dir.path()).unwrap().unwrap());
+        let result = sync_workspace_file(
+            ws_dir.path(),
+            &read_meta(ws_dir.path()).await.unwrap().unwrap(),
+        )
+        .await;
         assert!(result.is_ok());
 
         let ws_file = result.unwrap();
@@ -1733,7 +1757,7 @@ mod tests {
         );
 
         // Verify file contents
-        let contents = fs::read_to_string(&ws_file).unwrap();
+        let contents = std::fs::read_to_string(&ws_file).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["folders"][0]["path"], "src/pkg-a");
     }

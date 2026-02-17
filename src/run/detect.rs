@@ -1,6 +1,5 @@
 //! Build system auto-detection by scanning for marker files.
 
-use std::fs;
 use std::path::Path;
 
 use super::systems::{marker_files, refine_python_system};
@@ -17,12 +16,15 @@ pub(crate) struct Detection {
 ///
 /// Returns `None` if no known marker file is found. Marker files are checked in
 /// priority order (see [`marker_files()`]).
-pub(super) fn detect_build_system(dir: &Path) -> Option<BuildSystem> {
+pub(super) async fn detect_build_system(dir: &Path) -> Option<BuildSystem> {
     for &(marker, system) in marker_files() {
-        if dir.join(marker).exists() {
+        if tokio::fs::try_exists(dir.join(marker))
+            .await
+            .unwrap_or(false)
+        {
             // pyproject.toml could be uv or poetry — refine by inspecting content
             if marker == "pyproject.toml"
-                && let Ok(content) = fs::read_to_string(dir.join(marker))
+                && let Ok(content) = tokio::fs::read_to_string(dir.join(marker)).await
             {
                 return Some(refine_python_system(&content));
             }
@@ -36,12 +38,15 @@ pub(super) fn detect_build_system(dir: &Path) -> Option<BuildSystem> {
 ///
 /// The first entry in the returned vec is the winner. Subsequent entries are
 /// lower-priority matches. Returns an empty vec if nothing is found.
-pub(crate) fn detect_all_systems(dir: &Path) -> Vec<Detection> {
+pub(crate) async fn detect_all_systems(dir: &Path) -> Vec<Detection> {
     let mut results = Vec::new();
     for &(marker, system) in marker_files() {
-        if dir.join(marker).exists() {
+        if tokio::fs::try_exists(dir.join(marker))
+            .await
+            .unwrap_or(false)
+        {
             let resolved = if marker == "pyproject.toml" {
-                if let Ok(content) = fs::read_to_string(dir.join(marker)) {
+                if let Ok(content) = tokio::fs::read_to_string(dir.join(marker)).await {
                     refine_python_system(&content)
                 } else {
                     system
@@ -63,193 +68,235 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[test]
-    fn detects_cargo() {
+    #[tokio::test]
+    async fn detects_cargo() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Cargo));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Cargo)
+        );
     }
 
-    #[test]
-    fn detects_go() {
+    #[tokio::test]
+    async fn detects_go() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("go.mod"), "module example").unwrap();
+        std::fs::write(dir.path().join("go.mod"), "module example").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Go));
+        assert_eq!(detect_build_system(dir.path()).await, Some(BuildSystem::Go));
     }
 
-    #[test]
-    fn detects_npm_from_package_lock() {
+    #[tokio::test]
+    async fn detects_npm_from_package_lock() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("package.json"), "{}").unwrap();
-        fs::write(dir.path().join("package-lock.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("package-lock.json"), "{}").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Npm));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Npm)
+        );
     }
 
-    #[test]
-    fn detects_pnpm_over_npm() {
+    #[tokio::test]
+    async fn detects_pnpm_over_npm() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("package.json"), "{}").unwrap();
-        fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
 
         // pnpm-lock.yaml has higher priority than package.json
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Pnpm));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Pnpm)
+        );
     }
 
-    #[test]
-    fn detects_bun_from_lockfile() {
+    #[tokio::test]
+    async fn detects_bun_from_lockfile() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("package.json"), "{}").unwrap();
-        fs::write(dir.path().join("bun.lock"), "").unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("bun.lock"), "").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Bun));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Bun)
+        );
     }
 
-    #[test]
-    fn detects_yarn_from_lockfile() {
+    #[tokio::test]
+    async fn detects_yarn_from_lockfile() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("package.json"), "{}").unwrap();
-        fs::write(dir.path().join("yarn.lock"), "").unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("yarn.lock"), "").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Yarn));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Yarn)
+        );
     }
 
-    #[test]
-    fn detects_npm_from_package_json_alone() {
+    #[tokio::test]
+    async fn detects_npm_from_package_json_alone() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("package.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Npm));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Npm)
+        );
     }
 
-    #[test]
-    fn detects_uv_from_pyproject() {
+    #[tokio::test]
+    async fn detects_uv_from_pyproject() {
         let dir = TempDir::new().unwrap();
-        fs::write(
+        std::fs::write(
             dir.path().join("pyproject.toml"),
             "[project]\nname = \"my-project\"\n",
         )
         .unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Uv));
+        assert_eq!(detect_build_system(dir.path()).await, Some(BuildSystem::Uv));
     }
 
-    #[test]
-    fn detects_poetry_from_pyproject() {
+    #[tokio::test]
+    async fn detects_poetry_from_pyproject() {
         let dir = TempDir::new().unwrap();
-        fs::write(
+        std::fs::write(
             dir.path().join("pyproject.toml"),
             "[tool.poetry]\nname = \"my-project\"\n",
         )
         .unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Poetry));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Poetry)
+        );
     }
 
-    #[test]
-    fn detects_make() {
+    #[tokio::test]
+    async fn detects_make() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("Makefile"), "all:\n\techo hi").unwrap();
+        std::fs::write(dir.path().join("Makefile"), "all:\n\techo hi").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Make));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Make)
+        );
     }
 
-    #[test]
-    fn detects_just_from_justfile() {
+    #[tokio::test]
+    async fn detects_just_from_justfile() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("justfile"), "default:\n\techo hi").unwrap();
+        std::fs::write(dir.path().join("justfile"), "default:\n\techo hi").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Just));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Just)
+        );
     }
 
-    #[test]
-    fn detects_just_from_dot_justfile() {
+    #[tokio::test]
+    async fn detects_just_from_dot_justfile() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join(".justfile"), "default:\n\techo hi").unwrap();
+        std::fs::write(dir.path().join(".justfile"), "default:\n\techo hi").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Just));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Just)
+        );
     }
 
-    #[test]
-    fn detects_gradle_from_build_gradle() {
+    #[tokio::test]
+    async fn detects_gradle_from_build_gradle() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("build.gradle"), "plugins {}").unwrap();
+        std::fs::write(dir.path().join("build.gradle"), "plugins {}").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Gradle));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Gradle)
+        );
     }
 
-    #[test]
-    fn detects_gradle_from_build_gradle_kts() {
+    #[tokio::test]
+    async fn detects_gradle_from_build_gradle_kts() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("build.gradle.kts"), "plugins {}").unwrap();
+        std::fs::write(dir.path().join("build.gradle.kts"), "plugins {}").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Gradle));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Gradle)
+        );
     }
 
-    #[test]
-    fn detects_maven_from_pom_xml() {
+    #[tokio::test]
+    async fn detects_maven_from_pom_xml() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("pom.xml"), "<project></project>").unwrap();
+        std::fs::write(dir.path().join("pom.xml"), "<project></project>").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Maven));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Maven)
+        );
     }
 
-    #[test]
-    fn returns_none_for_empty_dir() {
+    #[tokio::test]
+    async fn returns_none_for_empty_dir() {
         let dir = TempDir::new().unwrap();
-        assert_eq!(detect_build_system(dir.path()), None);
+        assert_eq!(detect_build_system(dir.path()).await, None);
     }
 
-    #[test]
-    fn cargo_takes_priority_over_makefile() {
+    #[tokio::test]
+    async fn cargo_takes_priority_over_makefile() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
-        fs::write(dir.path().join("Makefile"), "all:").unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+        std::fs::write(dir.path().join("Makefile"), "all:").unwrap();
 
-        assert_eq!(detect_build_system(dir.path()), Some(BuildSystem::Cargo));
+        assert_eq!(
+            detect_build_system(dir.path()).await,
+            Some(BuildSystem::Cargo)
+        );
     }
 
     // ── detect_all_systems tests ───────────────────────────────
 
-    #[test]
-    fn detect_all_empty_dir() {
+    #[tokio::test]
+    async fn detect_all_empty_dir() {
         let dir = TempDir::new().unwrap();
-        assert!(detect_all_systems(dir.path()).is_empty());
+        assert!(detect_all_systems(dir.path()).await.is_empty());
     }
 
-    #[test]
-    fn detect_all_single_system() {
+    #[tokio::test]
+    async fn detect_all_single_system() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
 
-        let results = detect_all_systems(dir.path());
+        let results = detect_all_systems(dir.path()).await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].system, BuildSystem::Cargo);
         assert_eq!(results[0].marker, "Cargo.toml");
     }
 
-    #[test]
-    fn detect_all_cargo_and_makefile() {
+    #[tokio::test]
+    async fn detect_all_cargo_and_makefile() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
-        fs::write(dir.path().join("Makefile"), "all:").unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+        std::fs::write(dir.path().join("Makefile"), "all:").unwrap();
 
-        let results = detect_all_systems(dir.path());
+        let results = detect_all_systems(dir.path()).await;
         assert_eq!(results.len(), 2);
         // Cargo has higher priority
         assert_eq!(results[0].system, BuildSystem::Cargo);
         assert_eq!(results[1].system, BuildSystem::Make);
     }
 
-    #[test]
-    fn detect_all_pnpm_also_finds_package_json() {
+    #[tokio::test]
+    async fn detect_all_pnpm_also_finds_package_json() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("package.json"), "{}").unwrap();
-        fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
 
-        let results = detect_all_systems(dir.path());
+        let results = detect_all_systems(dir.path()).await;
         // Should find pnpm-lock.yaml (Pnpm) and package.json (Npm)
         assert!(results.len() >= 2);
         assert_eq!(results[0].system, BuildSystem::Pnpm);
@@ -257,29 +304,29 @@ mod tests {
         assert!(results.iter().any(|d| d.system == BuildSystem::Npm));
     }
 
-    #[test]
-    fn detect_all_preserves_priority_order() {
+    #[tokio::test]
+    async fn detect_all_preserves_priority_order() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("go.mod"), "module example").unwrap();
-        fs::write(dir.path().join("Makefile"), "all:").unwrap();
+        std::fs::write(dir.path().join("go.mod"), "module example").unwrap();
+        std::fs::write(dir.path().join("Makefile"), "all:").unwrap();
 
-        let results = detect_all_systems(dir.path());
+        let results = detect_all_systems(dir.path()).await;
         assert_eq!(results.len(), 2);
         // go.mod has higher priority than Makefile
         assert_eq!(results[0].system, BuildSystem::Go);
         assert_eq!(results[1].system, BuildSystem::Make);
     }
 
-    #[test]
-    fn detect_all_refines_pyproject_to_poetry() {
+    #[tokio::test]
+    async fn detect_all_refines_pyproject_to_poetry() {
         let dir = TempDir::new().unwrap();
-        fs::write(
+        std::fs::write(
             dir.path().join("pyproject.toml"),
             "[tool.poetry]\nname = \"my-project\"\n",
         )
         .unwrap();
 
-        let results = detect_all_systems(dir.path());
+        let results = detect_all_systems(dir.path()).await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].system, BuildSystem::Poetry);
         assert_eq!(results[0].marker, "pyproject.toml");

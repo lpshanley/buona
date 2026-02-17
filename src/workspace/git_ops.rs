@@ -1,7 +1,9 @@
 //! Git process helpers for workspace operations.
 
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
+
+use tokio::process::Command;
 
 use anyhow::{Context, Result};
 
@@ -9,10 +11,12 @@ use anyhow::{Context, Result};
 ///
 /// Returns an empty string when the directory is not a git repo, has no origin,
 /// or the command fails.
-pub(super) fn detect_remote_url(dir: &Path) -> String {
-    Command::new("git")
+pub(super) async fn detect_remote_url(dir: &Path) -> String {
+    let result = Command::new("git")
         .args(["-C", &dir.to_string_lossy(), "remote", "get-url", "origin"])
         .output()
+        .await;
+    result
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| {
@@ -26,8 +30,8 @@ pub(super) fn detect_remote_url(dir: &Path) -> String {
 ///
 /// Returns an empty string when the directory is not a git repo, HEAD is
 /// detached, or the command fails.
-pub(super) fn detect_branch(dir: &Path) -> String {
-    Command::new("git")
+pub(super) async fn detect_branch(dir: &Path) -> String {
+    let result = Command::new("git")
         .args([
             "-C",
             &dir.to_string_lossy(),
@@ -36,6 +40,8 @@ pub(super) fn detect_branch(dir: &Path) -> String {
             "HEAD",
         ])
         .output()
+        .await;
+    result
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| {
@@ -50,31 +56,34 @@ pub(super) fn detect_branch(dir: &Path) -> String {
 }
 
 /// Run `git init` in the target directory.
-pub(super) fn init_repo(dir: &Path) -> Result<Output> {
+pub(super) async fn init_repo(dir: &Path) -> Result<Output> {
     Command::new("git")
         .arg("init")
         .current_dir(dir)
         .output()
+        .await
         .context("failed to execute git init — is git installed?")
 }
 
 /// Run `git clone <url> <dest>`.
-pub(super) fn clone_into(url: &str, dest: &Path) -> Result<Output> {
+pub(super) async fn clone_into(url: &str, dest: &Path) -> Result<Output> {
     Command::new("git")
         .arg("clone")
         .arg(url)
         .arg(dest)
         .output()
+        .await
         .context("failed to execute git clone — is git installed?")
 }
 
 /// Run `git pull` or `git fetch` in a repo directory.
-pub(super) fn sync_repo(dir: &Path, fetch_only: bool) -> Result<Output> {
+pub(super) async fn sync_repo(dir: &Path, fetch_only: bool) -> Result<Output> {
     let git_arg = if fetch_only { "fetch" } else { "pull" };
     Command::new("git")
         .arg(git_arg)
         .current_dir(dir)
         .output()
+        .await
         .with_context(|| format!("failed to execute git {git_arg} — is git installed?"))
 }
 

@@ -23,6 +23,24 @@
 
 ## Installation
 
+### Quick install (recommended)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lpshanley/buona/main/install.sh | sh
+```
+
+This downloads the latest prebuilt binary for your platform and installs it to `~/.local/bin`. You can customize the install directory:
+
+```sh
+BUONA_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/lpshanley/buona/main/install.sh | sh
+```
+
+To install a specific version:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lpshanley/buona/main/install.sh | sh -s -- v0.1.6
+```
+
 ### From GitHub (requires [Rust](https://rustup.rs/))
 
 ```sh
@@ -39,6 +57,14 @@ Or, if you have [just](https://github.com/casey/just) installed:
 
 ```sh
 just install
+```
+
+### Updating
+
+Once installed, buona can update itself:
+
+```sh
+buona self update
 ```
 
 ## Quick start
@@ -417,6 +443,7 @@ Commands:
   config     View or set up the global configuration
   detect     Print the auto-detected build system for context/target(s)
   run        Run a command in context/target(s)
+  self       Manage the buona binary itself
   workspace  Manage workspaces (alias: ws)
 ```
 
@@ -510,6 +537,43 @@ buona workspace info [--workspace <NAME>] [--json]
 ```
 
 Displays detailed information about a workspace, including its name, directory path, `.code-workspace` file status, and all tracked packages with their URLs and on-disk clone status. Pass `--json` to output the raw workspace metadata as JSON.
+
+### `buona self`
+
+```
+buona self <COMMAND>
+
+Commands:
+  update  Check for and install updates
+```
+
+#### `buona self update`
+
+```
+buona self update [OPTIONS] [VERSION]
+```
+
+Checks for the latest release on GitHub and installs it, replacing the current binary. Downloads the prebuilt archive for your platform, verifies the SHA-256 checksum, and performs an atomic binary replacement.
+
+**Options:**
+- `--check` — Only check for updates without installing
+- `--yes` / `-y` — Skip the confirmation prompt
+
+**Examples:**
+```sh
+# Check for updates and prompt to install
+buona self update
+
+# Only check, don't install
+buona self update --check
+
+# Install without confirmation
+buona self update --yes
+
+# Install a specific version
+buona self update v0.1.5
+buona self update 0.1.5
+```
 
 ## Configuration
 
