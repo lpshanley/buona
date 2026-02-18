@@ -1,6 +1,7 @@
 //! CLI entry point for the buona workspace manager.
 
 mod config;
+mod path_value;
 mod run;
 mod self_update;
 mod styles;
@@ -100,6 +101,31 @@ enum ConfigCommands {
 
     /// Launch interactive setup wizard
     Setup,
+
+    /// Set a global configuration value
+    Set {
+        /// Configuration key path (e.g. git.host)
+        key: String,
+
+        /// Value (omit for boolean keys to imply `true`)
+        value: Option<String>,
+
+        /// Parse value as JSON (for objects/arrays)
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Get a global configuration value
+    Get {
+        /// Configuration key path (e.g. git.host)
+        key: String,
+    },
+
+    /// Unset a global configuration value
+    Unset {
+        /// Configuration key path (e.g. git.host)
+        key: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -187,6 +213,13 @@ enum WorkspaceCommands {
         workspace: Option<String>,
     },
 
+    /// Get or set workspace-specific configuration values
+    #[command(arg_required_else_help = true)]
+    Config {
+        #[command(subcommand)]
+        command: WorkspaceConfigCommands,
+    },
+
     /// Show detailed information about a workspace
     Info {
         /// Workspace name or directory (defaults to detecting from the current directory)
@@ -214,6 +247,46 @@ enum WorkspaceCommands {
         /// Override the package name (defaults to the directory name)
         #[arg(short, long)]
         name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkspaceConfigCommands {
+    /// Set a workspace configuration value
+    Set {
+        /// Configuration key (e.g. mount-root)
+        key: String,
+
+        /// Optional configuration value (defaults depend on key)
+        value: Option<String>,
+
+        /// Parse value as JSON (for objects/arrays)
+        #[arg(long)]
+        json: bool,
+
+        /// Workspace name or directory (defaults to detecting from the current directory)
+        #[arg(short, long)]
+        workspace: Option<String>,
+    },
+
+    /// Get a workspace configuration value
+    Get {
+        /// Configuration key (e.g. mount-root)
+        key: String,
+
+        /// Workspace name or directory (defaults to detecting from the current directory)
+        #[arg(short, long)]
+        workspace: Option<String>,
+    },
+
+    /// Unset a workspace configuration value
+    Unset {
+        /// Configuration key (e.g. mount-root)
+        key: String,
+
+        /// Workspace name or directory (defaults to detecting from the current directory)
+        #[arg(short, long)]
+        workspace: Option<String>,
     },
 }
 
@@ -250,6 +323,15 @@ async fn main() -> anyhow::Result<()> {
             }
             ConfigCommands::Setup => {
                 config::run_setup().await?;
+            }
+            ConfigCommands::Set { key, value, json } => {
+                config::set_value(&key, value.as_deref(), json).await?;
+            }
+            ConfigCommands::Get { key } => {
+                config::get_value(&key).await?;
+            }
+            ConfigCommands::Unset { key } => {
+                config::unset_value(&key).await?;
             }
         },
         Commands::Workspace { command } => match command {
@@ -298,6 +380,23 @@ async fn main() -> anyhow::Result<()> {
             WorkspaceCommands::Open { workspace } => {
                 workspace::open(workspace.as_deref()).await?;
             }
+            WorkspaceCommands::Config { command } => match command {
+                WorkspaceConfigCommands::Set {
+                    key,
+                    value,
+                    json,
+                    workspace,
+                } => {
+                    workspace::config_set(&key, value.as_deref(), json, workspace.as_deref())
+                        .await?;
+                }
+                WorkspaceConfigCommands::Get { key, workspace } => {
+                    workspace::config_get(&key, workspace.as_deref()).await?;
+                }
+                WorkspaceConfigCommands::Unset { key, workspace } => {
+                    workspace::config_unset(&key, workspace.as_deref()).await?;
+                }
+            },
             WorkspaceCommands::Info { workspace, json } => {
                 workspace::info(workspace.as_deref(), json).await?;
             }

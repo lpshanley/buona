@@ -6,12 +6,12 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::path_value;
+use crate::styles::Styles;
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use dialoguer::{Input, Select};
 use serde::{Deserialize, Serialize};
-
-use crate::styles::Styles;
 
 /// Supported IDE options.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -384,6 +384,39 @@ pub(crate) async fn run_setup() -> Result<()> {
     Ok(())
 }
 
+/// Set a global config value by key path.
+pub(crate) async fn set_value(key: &str, raw_value: Option<&str>, json_mode: bool) -> Result<()> {
+    let cfg = load_config().await?;
+    let mut value = serde_json::to_value(&cfg)?;
+    let tokens = path_value::parse_path(key)?;
+    let current = path_value::get_path(&value, &tokens).ok();
+    let parsed = path_value::parse_set_value(raw_value, json_mode, current)?;
+
+    path_value::set_path(&mut value, &tokens, parsed)?;
+    let next: BuonaConfig = serde_json::from_value(value)?;
+    save_config(&next).await?;
+    Ok(())
+}
+
+/// Get a global config value by key path.
+pub(crate) async fn get_value(key: &str) -> Result<()> {
+    let cfg = load_config().await?;
+    let value = serde_json::to_value(cfg)?;
+    let tokens = path_value::parse_path(key)?;
+    let found = path_value::get_path(&value, &tokens)?;
+    path_value::print_value(found)
+}
+
+/// Unset a global config value by key path.
+pub(crate) async fn unset_value(key: &str) -> Result<()> {
+    let cfg = load_config().await?;
+    let mut value = serde_json::to_value(cfg)?;
+    let tokens = path_value::parse_path(key)?;
+    path_value::unset_path(&mut value, &tokens)?;
+    let next: BuonaConfig = serde_json::from_value(value)?;
+    save_config(&next).await?;
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,5 +655,18 @@ mod tests {
         let json = r#"{"workspace_dir": "~/workspace", "git": {"host": "github.com"}}"#;
         let config: BuonaConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.git.tracking, GitTracking::Package);
+    }
+
+    #[test]
+    fn config_ignores_unknown_top_level_fields() {
+        let json =
+            r#"{"workspace_dir":"~/workspace","ide":"vscode","legacy_flag":true,"old_key":"x"}"#;
+        let config: BuonaConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.workspace_dir, "~/workspace");
+        assert_eq!(config.ide, Ide::Vscode);
+
+        let written = serde_json::to_string(&config).unwrap();
+        assert!(!written.contains("legacy_flag"));
+        assert!(!written.contains("old_key"));
     }
 }

@@ -16,5 +16,8 @@ mod vscode;
 mod workspace_file;
 
 pub(crate) use locator::find_workspace_root;
-pub(crate) use ops::{add, adopt, create, delete, info, list, open, remove_packages, sync};
+pub(crate) use ops::{
+    add, adopt, config_get, config_set, config_unset, create, delete, info, list, open,
+    remove_packages, sync,
+};
 pub(crate) use packages::list_package_names;

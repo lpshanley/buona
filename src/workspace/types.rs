@@ -17,6 +17,13 @@ pub(crate) struct WorkspaceMeta {
     /// When `None`, falls back to the global config default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) git_tracking: Option<GitTracking>,
+
+    /// Whether to include workspace root (`.`) in generated `.code-workspace`
+    /// folder entries.
+    ///
+    /// When `None`, behaves like `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) mount_root: Option<bool>,
 }
 
 /// Read workspace metadata from a directory, if a `buona.workspace.json` exists.
@@ -58,21 +65,13 @@ mod tests {
         let meta = WorkspaceMeta {
             name: "my-project".to_string(),
             git_tracking: None,
+            mount_root: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
         let deserialized: WorkspaceMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.name, "my-project");
         assert_eq!(deserialized.git_tracking, None);
-    }
-
-    #[test]
-    fn workspace_meta_ignores_legacy_packages_field() {
-        // Old metadata files may contain a "packages" array — serde should
-        // silently ignore it.
-        let json = r#"{"name": "old-workspace", "packages": [{"name": "pkg", "url": "x"}]}"#;
-        let meta: WorkspaceMeta = serde_json::from_str(json).unwrap();
-        assert_eq!(meta.name, "old-workspace");
-        assert_eq!(meta.git_tracking, None);
+        assert_eq!(deserialized.mount_root, None);
     }
 
     #[test]
@@ -80,6 +79,7 @@ mod tests {
         let meta = WorkspaceMeta {
             name: "mono".to_string(),
             git_tracking: Some(GitTracking::Workspace),
+            mount_root: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
         let deserialized: WorkspaceMeta = serde_json::from_str(&json).unwrap();
@@ -91,9 +91,23 @@ mod tests {
         let meta = WorkspaceMeta {
             name: "test".to_string(),
             git_tracking: None,
+            mount_root: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
         assert!(!json.contains("git_tracking"));
+        assert!(!json.contains("mount_root"));
+    }
+
+    #[test]
+    fn workspace_meta_mount_root_round_trips() {
+        let meta = WorkspaceMeta {
+            name: "test".to_string(),
+            git_tracking: None,
+            mount_root: Some(true),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let deserialized: WorkspaceMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.mount_root, Some(true));
     }
 
     #[tokio::test]
@@ -102,6 +116,7 @@ mod tests {
         let meta = WorkspaceMeta {
             name: "test-workspace".to_string(),
             git_tracking: None,
+            mount_root: None,
         };
         let json = serde_json::to_string_pretty(&meta).unwrap();
         std::fs::write(dir.path().join(WORKSPACE_FILE), json).unwrap();
@@ -124,10 +139,22 @@ mod tests {
         let meta = WorkspaceMeta {
             name: "test".to_string(),
             git_tracking: None,
+            mount_root: None,
         };
         write_meta(dir.path(), &meta).await.unwrap();
 
         let result = read_meta(dir.path()).await.unwrap().unwrap();
         assert_eq!(result.name, "test");
+    }
+
+    #[test]
+    fn workspace_meta_ignores_unknown_fields() {
+        let json = r#"{"name":"test","mount_root":true,"legacy_flag":true}"#;
+        let meta: WorkspaceMeta = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.name, "test");
+        assert_eq!(meta.mount_root, Some(true));
+
+        let written = serde_json::to_string(&meta).unwrap();
+        assert!(!written.contains("legacy_flag"));
     }
 }

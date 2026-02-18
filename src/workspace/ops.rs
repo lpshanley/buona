@@ -6,12 +6,12 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
-use dialoguer::Confirm;
-
 use crate::config;
 use crate::config::GitTracking;
+use crate::path_value;
 use crate::styles::Styles;
+use anyhow::{Context, Result, bail};
+use dialoguer::Confirm;
 
 use super::add_packages::add_packages_to_workspace;
 use super::adopt_package::adopt_into_workspace;
@@ -163,6 +163,7 @@ pub(crate) async fn create(
     let meta = WorkspaceMeta {
         name: ws_name,
         git_tracking,
+        mount_root: None,
     };
     write_meta(&target, &meta).await?;
 
@@ -309,6 +310,75 @@ pub(crate) async fn open(workspace: Option<&str>) -> Result<()> {
     open_workspace_at(&ws_root).await
 }
 
+/// Set a workspace configuration value.
+pub(crate) async fn config_set(
+    key: &str,
+    value: Option<&str>,
+    json_mode: bool,
+    workspace: Option<&str>,
+) -> Result<()> {
+    let s = Styles::default();
+    let ws_root = resolve_workspace_target(workspace).await?;
+    let meta = read_meta(&ws_root)
+        .await?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+    let mut doc = serde_json::to_value(&meta)?;
+    let tokens = path_value::parse_path(key)?;
+    let current = path_value::get_path(&doc, &tokens).ok();
+    let parsed = path_value::parse_set_value(value, json_mode, current)?;
+    path_value::set_path(&mut doc, &tokens, parsed)?;
+    let next: WorkspaceMeta = serde_json::from_value(doc)?;
+
+    write_meta(&ws_root, &next).await?;
+    let ws_file_path = sync_workspace_file(&ws_root, &next).await?;
+    println!("  {} Updated workspace config", s.green.apply_to("✔"));
+    println!(
+        "  {} Synced {}",
+        s.dim.apply_to("→"),
+        ws_file_path.display()
+    );
+    println!();
+
+    Ok(())
+}
+
+/// Get a workspace configuration value.
+pub(crate) async fn config_get(key: &str, workspace: Option<&str>) -> Result<()> {
+    let ws_root = resolve_workspace_target(workspace).await?;
+    let meta = read_meta(&ws_root)
+        .await?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+    let doc = serde_json::to_value(meta)?;
+    let tokens = path_value::parse_path(key)?;
+    let found = path_value::get_path(&doc, &tokens)?;
+    path_value::print_value(found)
+}
+
+/// Reset a workspace configuration value to default.
+pub(crate) async fn config_unset(key: &str, workspace: Option<&str>) -> Result<()> {
+    let s = Styles::default();
+    let ws_root = resolve_workspace_target(workspace).await?;
+    let meta = read_meta(&ws_root)
+        .await?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+    let mut doc = serde_json::to_value(meta)?;
+    let tokens = path_value::parse_path(key)?;
+    path_value::unset_path(&mut doc, &tokens)?;
+    let next: WorkspaceMeta = serde_json::from_value(doc)?;
+    write_meta(&ws_root, &next).await?;
+    let ws_file_path = sync_workspace_file(&ws_root, &next).await?;
+
+    println!("  {} Updated workspace config", s.green.apply_to("✔"));
+    println!(
+        "  {} Synced {}",
+        s.dim.apply_to("→"),
+        ws_file_path.display()
+    );
+    println!();
+
+    Ok(())
+}
+
 /// Adopt an existing local directory into the workspace.
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
@@ -352,6 +422,7 @@ mod tests {
         let meta = WorkspaceMeta {
             name: name.to_string(),
             git_tracking: tracking,
+            mount_root: None,
         };
         write_meta(dir, &meta).await.unwrap();
     }
@@ -423,6 +494,7 @@ mod tests {
         let meta = WorkspaceMeta {
             name: "test".to_string(),
             git_tracking: None,
+            mount_root: None,
         };
         write_meta(dir.path(), &meta).await.unwrap();
 
@@ -595,6 +667,26 @@ mod tests {
         let contents = std::fs::read_to_string(&ws_file_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["folders"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn sync_workspace_file_includes_root_when_mount_root_enabled() {
+        let dir = TempDir::new().unwrap();
+        setup_workspace(dir.path(), "root-ws").await;
+
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(src.join("pkg-a")).unwrap();
+
+        let mut meta = read_meta(dir.path()).await.unwrap().unwrap();
+        meta.mount_root = Some(true);
+        write_meta(dir.path(), &meta).await.unwrap();
+
+        let ws_file_path = sync_workspace_file(dir.path(), &meta).await.unwrap();
+        let contents = std::fs::read_to_string(&ws_file_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+
+        assert_eq!(parsed["folders"][0]["path"], ".");
+        assert_eq!(parsed["folders"][1]["path"], "src/pkg-a");
     }
 
     // ── adopt tests ─────────────────────────────────────────────────
@@ -857,6 +949,7 @@ mod tests {
         let meta = WorkspaceMeta {
             name: "test".to_string(),
             git_tracking: Some(GitTracking::Workspace),
+            mount_root: None,
         };
         let cfg = config::BuonaConfig::default(); // default tracking = Package
         assert_eq!(resolve_git_tracking(&meta, &cfg), GitTracking::Workspace);
@@ -867,6 +960,7 @@ mod tests {
         let meta = WorkspaceMeta {
             name: "test".to_string(),
             git_tracking: None,
+            mount_root: None,
         };
         let mut cfg = config::BuonaConfig::default();
         cfg.git.tracking = GitTracking::Workspace;
@@ -878,8 +972,11 @@ mod tests {
         let meta = WorkspaceMeta {
             name: "test".to_string(),
             git_tracking: None,
+            mount_root: None,
         };
         let cfg = config::BuonaConfig::default();
         assert_eq!(resolve_git_tracking(&meta, &cfg), GitTracking::Package);
     }
+
+    // path parsing/value parsing is tested in `path_value` unit tests.
 }

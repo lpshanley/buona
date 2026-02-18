@@ -26,13 +26,23 @@ pub(super) async fn sync_workspace_file(ws_root: &Path, meta: &WorkspaceMeta) ->
     let ws_file_path = ws_root.join(&filename);
 
     let pkg_names = list_package_names(ws_root).await?;
-    let folders: Vec<VscodeWorkspaceFolder> = pkg_names
+    let mut folders: Vec<VscodeWorkspaceFolder> = pkg_names
         .iter()
         .map(|name| VscodeWorkspaceFolder {
             path: format!("src/{name}"),
             name: name.clone(),
         })
         .collect();
+
+    if meta.mount_root.unwrap_or(false) {
+        folders.insert(
+            0,
+            VscodeWorkspaceFolder {
+                path: ".".to_string(),
+                name: format!("{}-root", meta.name),
+            },
+        );
+    }
 
     let vscode_ws = VscodeWorkspace {
         folders,

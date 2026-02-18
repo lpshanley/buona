@@ -455,6 +455,25 @@ buona config <COMMAND>
 Commands:
   show   Display the current configuration (use --json for machine-readable output)
   setup  Launch the interactive setup wizard
+  set    Set a global configuration value
+  get    Get a global configuration value
+  unset  Unset a global configuration value
+```
+
+Examples:
+
+```sh
+# set a primitive
+buona config set git.host github.example.com
+
+# get a nested value
+buona config get git.host
+
+# set structured JSON
+buona config set git --json '{"host":"github.com","organization":"acme","protocol":"ssh","tracking":"package"}'
+
+# unset nested key (falls back to serde default on next load/save)
+buona config unset git.organization
 ```
 
 ### `buona workspace`
@@ -471,6 +490,7 @@ Commands:
   remove  Remove packages from a workspace
   sync    Pull latest changes for all packages and sync the workspace file
   open    Open workspace in the configured editor
+  config  Get or set workspace-specific configuration values
   info    Show detailed information about a workspace
 ```
 
@@ -530,6 +550,29 @@ buona workspace open [--workspace <NAME>]
 
 Regenerates the `.code-workspace` file and opens it in your configured editor (VS Code or Cursor).
 
+#### `buona workspace config`
+
+```
+buona workspace config <COMMAND>
+
+Commands:
+  set    Set a workspace configuration value
+  get    Get a workspace configuration value
+  unset  Reset a workspace configuration value to default
+```
+
+Example:
+
+```sh
+# enable root folder mount in current workspace
+buona ws config set mount_root
+
+# disable (back to default false)
+buona ws config unset mount_root
+```
+
+`set/get/unset` support dotted object paths and array indexes in both global and workspace config commands (for example: `git.host`, `arr[0]`, `obj.items[1].name`). Keys must match the exact JSON field names (snake_case).
+
 #### `buona workspace info`
 
 ```
@@ -587,13 +630,16 @@ Buona stores its configuration at `~/.config/buona/config.json`. The current set
 | `git.organization` | Default organization on the git host          | *(empty)*      |
 | `git.protocol`     | Clone/push protocol (`ssh` or `https`)        | `ssh`          |
 
+Unknown keys are ignored when reading config files and are not written back, so legacy/abandoned keys are automatically dropped the next time buona saves config.
+
 ## Workspace metadata
 
 Each workspace contains a `buona.workspace.json` file:
 
 ```json
 {
-  "name": "my-project"
+  "name": "my-project",
+  "mount_root": true
 }
 ```
 
@@ -612,6 +658,8 @@ When packages are added via `buona ws add`, they are tracked in this file:
 ```
 
 The `packages` field is omitted when empty, so existing workspaces remain compatible.
+
+Like global config, unknown keys in `buona.workspace.json` are ignored on read and dropped on write.
 
 ## Development
 

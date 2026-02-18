@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://buona.dev/schemas/buona.workspace.schema.json",
+  "$id": "https://buona.shanley.dev/schemas/buona.workspace.schema.json",
   "title": "Buona Workspace",
   "description": "Workspace metadata for a buona-managed workspace (buona.workspace.json).",
   "type": "object",
@@ -18,6 +18,10 @@
       "type": "string",
       "description": "Override the git tracking mode for this workspace. When omitted, the global config default is used.",
       "enum": ["package", "workspace"]
+    },
+    "mount_root": {
+      "type": "boolean",
+      "description": "When true, include the workspace root (.) in generated .code-workspace folders."
     }
   }
 }

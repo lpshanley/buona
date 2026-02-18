@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://buona.dev/schemas/buona.schema.json",
+  "$id": "https://buona.shanley.dev/schemas/buona.schema.json",
   "title": "Buona Run Config",
   "description": "Target configuration for buona run/detect (buona.json). Applies to whichever execution target directory is selected (workspace root or package directory).",
   "type": "object",

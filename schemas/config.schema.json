@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://buona.dev/schemas/config.schema.json",
+  "$id": "https://buona.shanley.dev/schemas/config.schema.json",
   "title": "Buona Config",
   "description": "Global configuration for buona (~/.config/buona/config.json).",
   "type": "object",
