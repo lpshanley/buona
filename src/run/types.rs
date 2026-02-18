@@ -24,6 +24,23 @@ pub(crate) enum BuildSystem {
     Maven,
 }
 
+/// Failure behavior for parallel runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum FailPolicy {
+    FailFast,
+    Continue,
+}
+
+impl fmt::Display for FailPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FailPolicy::FailFast => write!(f, "fail-fast"),
+            FailPolicy::Continue => write!(f, "continue"),
+        }
+    }
+}
+
 #[cfg(test)]
 impl BuildSystem {
     const ALL: &[BuildSystem] = &[
@@ -268,5 +285,11 @@ mod tests {
     fn hook_phase_display() {
         assert_eq!(HookPhase::Pre.to_string(), "pre");
         assert_eq!(HookPhase::Post.to_string(), "post");
+    }
+
+    #[test]
+    fn fail_policy_display() {
+        assert_eq!(FailPolicy::FailFast.to_string(), "fail-fast");
+        assert_eq!(FailPolicy::Continue.to_string(), "continue");
     }
 }

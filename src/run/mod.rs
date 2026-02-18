@@ -17,4 +17,4 @@ mod types;
 
 pub(crate) use error::RunError;
 pub(crate) use ops::{RunOptions, detect, execute};
-pub(crate) use types::BuildSystem;
+pub(crate) use types::{BuildSystem, FailPolicy};

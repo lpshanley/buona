@@ -299,6 +299,9 @@ buona run test -t api -t web
 # Recursive orchestration: root + all packages (alphabetical)
 buona run install -r
 
+# Recursive parallel execution with 4 workers
+buona run test -r --parallel --jobs 4
+
 # Preview staged graph with noop leaves
 buona run install --dry-run -r
 ```
@@ -309,6 +312,9 @@ buona run install --dry-run -r
 - `--verbose` — Print detailed resolution information
 - `--target <root|PACKAGE>` / `-t` — Run only for the provided target(s), in the order provided
 - `--recursive` / `-r` — Run staged orchestration for workspace root and all packages (alphabetical)
+- `--parallel` — Enable parallel execution across recursive package runs or explicit target lists
+- `--jobs <N>` — Maximum concurrent tasks in parallel mode
+- `--fail-policy <fail-fast|continue>` — Parallel failure behavior
 - `--` — Pass remaining arguments to the underlying tool
 
 When `--dry-run` is used with `-t` or `-r`, buona prints a staged execution graph and renders missing leaves as dimmed `noop` (e.g., no pre/post hook for that stage). If a command stage cannot be resolved (for example no build system detected), it is shown as `skipped` and `--verbose` includes the reason.

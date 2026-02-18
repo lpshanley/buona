@@ -14,7 +14,7 @@ serde_json = "1"
 dirs = "6"
 dialoguer = "0.12"
 console = "0.16"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process", "io-util", "sync", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 sha2 = "0.10"
 flate2 = "1"

@@ -74,6 +74,18 @@ enum Commands {
         #[arg(short, long)]
         recursive: bool,
 
+        /// Enable parallel execution for recursive or explicit-target runs
+        #[arg(long)]
+        parallel: bool,
+
+        /// Max concurrent package tasks when parallel mode is enabled
+        #[arg(long)]
+        jobs: Option<usize>,
+
+        /// Failure behavior for parallel runs
+        #[arg(long, value_enum)]
+        fail_policy: Option<run::FailPolicy>,
+
         /// The command to run (e.g. build, test, lint)
         command: String,
 
@@ -430,6 +442,9 @@ async fn main() -> anyhow::Result<()> {
             verbose,
             targets,
             recursive,
+            parallel,
+            jobs,
+            fail_policy,
             command,
             args,
         } => {
@@ -439,6 +454,9 @@ async fn main() -> anyhow::Result<()> {
                 verbose,
                 targets,
                 recursive,
+                parallel,
+                jobs,
+                fail_policy,
                 command,
                 args,
             };

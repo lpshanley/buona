@@ -12,9 +12,9 @@ use super::detect_cmd;
 use super::error::RunError;
 use super::executor;
 use super::output;
-use super::planner::resolve_target_run_plan;
+use super::planner::{TargetRunPlan, resolve_target_run_plan};
 use super::targets::resolve_targets;
-use super::types::BuildSystem;
+use super::types::{BuildSystem, FailPolicy};
 
 /// CLI options for the run command, parsed by clap and passed from main.
 pub(crate) struct RunOptions {
@@ -23,10 +23,27 @@ pub(crate) struct RunOptions {
     pub(crate) verbose: bool,
     pub(crate) targets: Vec<String>,
     pub(crate) recursive: bool,
+    pub(crate) parallel: bool,
+    pub(crate) jobs: Option<usize>,
+    pub(crate) fail_policy: Option<FailPolicy>,
     /// The command to run (e.g. "build", "test", "lint").
     pub(crate) command: String,
     /// Additional arguments passed through to the underlying tool (after `--`).
     pub(crate) args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct EffectiveExecution {
+    pub(super) parallel: bool,
+    pub(super) jobs: usize,
+    pub(super) fail_policy: FailPolicy,
+}
+
+fn default_jobs() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .max(1)
 }
 
 /// Execute the run command.
@@ -35,6 +52,7 @@ pub(crate) async fn execute(options: RunOptions) -> Result<()> {
 
     let command_name = &options.command;
     let extra_args = &options.args;
+    let execution = resolve_effective_execution(&options)?;
 
     if options.recursive && !options.targets.is_empty() {
         return Err(RunError::ConfigError(
@@ -53,10 +71,11 @@ pub(crate) async fn execute(options: RunOptions) -> Result<()> {
     })?;
 
     if options.recursive {
-        return executor::execute_recursive(&options, &ws_root).await;
+        return executor::execute_recursive(&options, &ws_root, execution).await;
     }
 
     let targets = resolve_targets(&cwd, &ws_root, &options.targets, false).await?;
+    let mut target_plans: Vec<TargetRunPlan> = Vec::new();
 
     for target in targets {
         let target_plan =
@@ -101,15 +120,33 @@ pub(crate) async fn execute(options: RunOptions) -> Result<()> {
             continue;
         }
 
-        executor::execute_with_hooks(&target_plan.plan, &target_plan.hooks).await?;
+        target_plans.push(target_plan);
     }
 
     if options.dry_run {
         println!();
+    } else {
+        executor::execute_target_plans(target_plans, execution).await?;
     }
 
     Ok(())
 }
 pub(crate) async fn detect(targets: Vec<String>, recursive: bool) -> Result<()> {
     detect_cmd::detect(targets, recursive).await
+}
+
+fn resolve_effective_execution(options: &RunOptions) -> Result<EffectiveExecution> {
+    let parallel = options.parallel;
+    let jobs = options.jobs.unwrap_or_else(default_jobs);
+    if jobs == 0 {
+        return Err(RunError::ConfigError("jobs must be at least 1".to_string()).into());
+    }
+
+    let fail_policy = options.fail_policy.unwrap_or(FailPolicy::FailFast);
+
+    Ok(EffectiveExecution {
+        parallel,
+        jobs,
+        fail_policy,
+    })
 }
