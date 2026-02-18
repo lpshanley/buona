@@ -338,19 +338,25 @@ When `--dry-run` is used with `-t` or `-r`, buona prints a staged execution grap
 
 Create a `buona.json` file in any execution target directory (workspace root or package root) to customize build system behavior for that target.
 
-### Example `buona.json`
+### Complete `buona.json` template
 
 ```json
 {
+  "$schema": "./schemas/buona.schema.json",
   "system": "cargo",
   "commands": {
-    "build": { "system": "make" },
-    "test": { "exec": ["pnpm", "run", "custom-test"] }
+    "build": {
+      "system": "make"
+    },
+    "test": {
+      "exec": ["pnpm", "run", "custom-test"]
+    }
   },
   "hooksDir": ".buona/hooks",
   "hooks": {
     "prebuild": "./scripts/generate.sh",
-    "posttest": "docker compose down"
+    "posttest": "docker compose down",
+    "prelint": ["cargo", "fmt", "--check"]
   }
 }
 ```
@@ -379,6 +385,16 @@ Each command in the `commands` object can have:
   }
 }
 ```
+
+### Fallthrough (proxy) behavior
+
+If a command is not explicitly overridden with `commands.<name>.exec`, buona proxies it through the resolved system.
+
+- With `"system": "make"`, `buona run deploy` executes `make deploy`.
+- With `"system": "cargo"`, `buona run clippy` executes `cargo clippy`.
+- With `"system": "npm"`, non-builtins are proxied as `npm run <command>`.
+
+This means you can set a single system and still run custom/non-standard commands through that tool.
 
 ## Lifecycle Hooks
 
@@ -635,6 +651,23 @@ Buona stores its configuration at `~/.config/buona/config.json`. The current set
 | `git.host`         | Default git host                              | `github.com`   |
 | `git.organization` | Default organization on the git host          | *(empty)*      |
 | `git.protocol`     | Clone/push protocol (`ssh` or `https`)        | `ssh`          |
+| `git.tracking`     | Default workspace git tracking mode (`package` or `workspace`) | `package` |
+
+Complete `~/.config/buona/config.json` template:
+
+```json
+{
+  "$schema": "./schemas/config.schema.json",
+  "workspace_dir": "~/workspace",
+  "ide": "vscode",
+  "git": {
+    "host": "github.com",
+    "organization": "",
+    "protocol": "ssh",
+    "tracking": "package"
+  }
+}
+```
 
 Unknown keys are ignored when reading config files and are not written back, so legacy/abandoned keys are automatically dropped the next time buona saves config.
 
@@ -644,26 +677,14 @@ Each workspace contains a `buona.workspace.json` file:
 
 ```json
 {
+  "$schema": "./schemas/buona.workspace.schema.json",
   "name": "my-project",
+  "git_tracking": "package",
   "mount_root": true
 }
 ```
 
-When packages are added via `buona ws add`, they are tracked in this file:
-
-```json
-{
-  "name": "my-project",
-  "packages": [
-    {
-      "name": "toolkit",
-      "url": "git@github.com:acme/toolkit.git"
-    }
-  ]
-}
-```
-
-The `packages` field is omitted when empty, so existing workspaces remain compatible.
+Packages are discovered from the workspace `src/` directory and from git remotes at runtime; they are not stored in `buona.workspace.json`.
 
 Like global config, unknown keys in `buona.workspace.json` are ignored on read and dropped on write.
 
