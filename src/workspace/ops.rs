@@ -189,28 +189,38 @@ pub(crate) async fn create(
         );
     }
 
-    // Apply workspace template
+    // Apply workspace template (non-fatal — warn on errors, don't abort creation)
     if !no_template {
         let tmpl_path_str = template_override.or(cfg.workspace_template.as_deref());
         if let Some(tmpl_str) = tmpl_path_str {
-            let tmpl = config::expand_tilde(tmpl_str)?;
-            if tmpl.is_dir() {
-                println!(
-                    "  {} Applying workspace template from {}",
-                    s.cyan.apply_to("→"),
-                    tmpl.display()
-                );
-                super::template::apply_template(&tmpl, &target).await?;
-                println!(
-                    "  {} Applied workspace template",
-                    s.green.apply_to("✔"),
-                );
-            } else if !tmpl.exists() {
-                println!(
-                    "  {} Template path does not exist: {}",
-                    s.yellow.apply_to("⚠"),
-                    tmpl.display()
-                );
+            match config::expand_tilde(tmpl_str) {
+                Ok(tmpl) if tmpl.is_dir() => {
+                    println!(
+                        "  {} Applying workspace template from {}",
+                        s.cyan.apply_to("→"),
+                        tmpl.display()
+                    );
+                    super::template::apply_template(&tmpl, &target).await?;
+                    println!(
+                        "  {} Applied workspace template",
+                        s.green.apply_to("✔"),
+                    );
+                }
+                Ok(tmpl) if !tmpl.exists() => {
+                    println!(
+                        "  {} Template path does not exist: {}",
+                        s.yellow.apply_to("⚠"),
+                        tmpl.display()
+                    );
+                }
+                Ok(_) => {} // exists but not a directory — silently skip
+                Err(e) => {
+                    println!(
+                        "  {} Could not resolve template path: {}",
+                        s.yellow.apply_to("⚠"),
+                        e
+                    );
+                }
             }
         }
     }
@@ -226,7 +236,9 @@ pub(crate) async fn create(
     );
     println!("  {}  {}", s.dim.apply_to("Location:"), target.display());
 
-    // Merge default packages with explicit packages
+    // Merge default packages with explicit packages.
+    // Defaults come first, then any explicit packages not already in defaults.
+    // Use --no-defaults to skip defaults entirely.
     let explicit: Vec<String> = packages
         .map(|p| p.to_vec())
         .unwrap_or_default();
