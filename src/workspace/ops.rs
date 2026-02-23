@@ -120,6 +120,10 @@ pub(crate) async fn create(
     packages: Option<&[String]>,
     open_ws: bool,
     git_tracking: Option<GitTracking>,
+    _no_defaults: bool,
+    _template: Option<&str>,
+    _no_template: bool,
+    _no_install: bool,
 ) -> Result<()> {
     let s = Styles::default();
 
