@@ -146,6 +146,14 @@ pub(crate) struct BuonaConfig {
     /// Default git settings.
     #[serde(default)]
     pub(crate) git: GitConfig,
+
+    /// Packages to include in every new workspace by default.
+    #[serde(default)]
+    pub(crate) default_packages: Vec<String>,
+
+    /// Path to a template directory for new workspaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) workspace_template: Option<String>,
 }
 
 impl Default for BuonaConfig {
@@ -154,6 +162,8 @@ impl Default for BuonaConfig {
             workspace_dir: "~/workspace".to_string(),
             ide: Ide::default(),
             git: GitConfig::default(),
+            default_packages: Vec::new(),
+            workspace_template: None,
         }
     }
 }
@@ -256,6 +266,26 @@ pub(crate) async fn print_pretty(config: &BuonaConfig) -> Result<()> {
         config.git.tracking
     );
     println!();
+
+    if !config.default_packages.is_empty() || config.workspace_template.is_some() {
+        println!("  {}", s.bold.apply_to("Workspace Defaults"));
+        println!("  {}", s.dim.apply_to("───────────────────"));
+        if !config.default_packages.is_empty() {
+            println!(
+                "  {}  {}",
+                s.cyan.apply_to("Default Packages:"),
+                config.default_packages.join(", ")
+            );
+        }
+        if let Some(ref tmpl) = config.workspace_template {
+            println!(
+                "  {}  {}",
+                s.cyan.apply_to("Workspace Template:"),
+                tmpl
+            );
+        }
+        println!();
+    }
 
     if !file_exists {
         println!(
@@ -369,6 +399,8 @@ pub(crate) async fn run_setup() -> Result<()> {
             protocol: git_protocol,
             tracking: git_tracking,
         },
+        default_packages: current.default_packages,
+        workspace_template: current.workspace_template,
     };
 
     save_config(&config).await?;
@@ -500,6 +532,8 @@ mod tests {
             workspace_dir: "~/work".to_string(),
             ide: Ide::Cursor,
             git: GitConfig::default(),
+            default_packages: Vec::new(),
+            workspace_template: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: BuonaConfig = serde_json::from_str(&json).unwrap();
@@ -603,6 +637,8 @@ mod tests {
                 protocol: GitProtocol::Https,
                 tracking: GitTracking::Workspace,
             },
+            default_packages: Vec::new(),
+            workspace_template: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: BuonaConfig = serde_json::from_str(&json).unwrap();
@@ -655,6 +691,60 @@ mod tests {
         let json = r#"{"workspace_dir": "~/workspace", "git": {"host": "github.com"}}"#;
         let config: BuonaConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.git.tracking, GitTracking::Package);
+    }
+
+    // ── default_packages / workspace_template tests ─────────────
+
+    #[test]
+    fn config_without_default_packages_gets_empty_vec() {
+        let json = r#"{"workspace_dir": "~/workspace"}"#;
+        let config: BuonaConfig = serde_json::from_str(json).unwrap();
+        assert!(config.default_packages.is_empty());
+    }
+
+    #[test]
+    fn config_with_default_packages_round_trips() {
+        let config = BuonaConfig {
+            workspace_dir: "~/work".to_string(),
+            ide: Ide::default(),
+            git: GitConfig::default(),
+            default_packages: vec!["repo-a".to_string(), "repo-b".to_string()],
+            workspace_template: None,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: BuonaConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.default_packages, vec!["repo-a", "repo-b"]);
+    }
+
+    #[test]
+    fn config_with_all_new_fields_round_trips() {
+        let config = BuonaConfig {
+            workspace_dir: "~/work".to_string(),
+            ide: Ide::default(),
+            git: GitConfig::default(),
+            default_packages: vec!["core-lib".to_string()],
+            workspace_template: Some("~/.config/buona/templates/default".to_string()),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: BuonaConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.default_packages, vec!["core-lib"]);
+        assert_eq!(
+            deserialized.workspace_template,
+            Some("~/.config/buona/templates/default".to_string())
+        );
+    }
+
+    #[test]
+    fn config_without_workspace_template_omits_field() {
+        let config = BuonaConfig {
+            workspace_dir: "~/work".to_string(),
+            ide: Ide::default(),
+            git: GitConfig::default(),
+            default_packages: Vec::new(),
+            workspace_template: None,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("workspace_template"));
     }
 
     #[test]
