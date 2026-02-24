@@ -11,7 +11,10 @@ pub(super) async fn apply_template(template_dir: &Path, target: &Path) -> Result
     copy_dir_recursive(template_dir, target).await
 }
 
-fn copy_dir_recursive<'a>(src: &'a Path, dst: &'a Path) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+fn copy_dir_recursive<'a>(
+    src: &'a Path,
+    dst: &'a Path,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
     Box::pin(copy_dir_recursive_inner(src, dst))
 }
 
@@ -34,18 +37,20 @@ async fn copy_dir_recursive_inner(src: &Path, dst: &Path) -> Result<()> {
         let file_type = entry.file_type().await?;
 
         if file_type.is_dir() {
-            tokio::fs::create_dir_all(&dst_path).await.with_context(|| {
-                format!("could not create directory: {}", dst_path.display())
-            })?;
+            tokio::fs::create_dir_all(&dst_path)
+                .await
+                .with_context(|| format!("could not create directory: {}", dst_path.display()))?;
             copy_dir_recursive(&src_path, &dst_path).await?;
         } else {
-            tokio::fs::copy(&src_path, &dst_path).await.with_context(|| {
-                format!(
-                    "could not copy {} to {}",
-                    src_path.display(),
-                    dst_path.display()
-                )
-            })?;
+            tokio::fs::copy(&src_path, &dst_path)
+                .await
+                .with_context(|| {
+                    format!(
+                        "could not copy {} to {}",
+                        src_path.display(),
+                        dst_path.display()
+                    )
+                })?;
 
             // Preserve permissions (important for executable hooks).
             // tokio::fs::copy on unix preserves permissions via the underlying
@@ -72,17 +77,27 @@ mod tests {
         let template = TempDir::new().unwrap();
         let target = TempDir::new().unwrap();
 
-        fs::write(template.path().join("CLAUDE.md"), "# Claude").await.unwrap();
-        fs::write(template.path().join("buona.json"), "{}").await.unwrap();
+        fs::write(template.path().join("CLAUDE.md"), "# Claude")
+            .await
+            .unwrap();
+        fs::write(template.path().join("buona.json"), "{}")
+            .await
+            .unwrap();
 
-        apply_template(template.path(), target.path()).await.unwrap();
+        apply_template(template.path(), target.path())
+            .await
+            .unwrap();
 
         assert_eq!(
-            fs::read_to_string(target.path().join("CLAUDE.md")).await.unwrap(),
+            fs::read_to_string(target.path().join("CLAUDE.md"))
+                .await
+                .unwrap(),
             "# Claude"
         );
         assert_eq!(
-            fs::read_to_string(target.path().join("buona.json")).await.unwrap(),
+            fs::read_to_string(target.path().join("buona.json"))
+                .await
+                .unwrap(),
             "{}"
         );
     }
@@ -98,7 +113,9 @@ mod tests {
             .await
             .unwrap();
 
-        apply_template(template.path(), target.path()).await.unwrap();
+        apply_template(template.path(), target.path())
+            .await
+            .unwrap();
 
         let copied = target.path().join(".buona/hooks/postinstall");
         assert!(copied.exists());
@@ -113,11 +130,19 @@ mod tests {
         let template = TempDir::new().unwrap();
         let target = TempDir::new().unwrap();
 
-        fs::write(template.path().join("buona.workspace.json"), "{}").await.unwrap();
-        fs::write(template.path().join("test.code-workspace"), "{}").await.unwrap();
-        fs::write(template.path().join("keep.txt"), "keep").await.unwrap();
+        fs::write(template.path().join("buona.workspace.json"), "{}")
+            .await
+            .unwrap();
+        fs::write(template.path().join("test.code-workspace"), "{}")
+            .await
+            .unwrap();
+        fs::write(template.path().join("keep.txt"), "keep")
+            .await
+            .unwrap();
 
-        apply_template(template.path(), target.path()).await.unwrap();
+        apply_template(template.path(), target.path())
+            .await
+            .unwrap();
 
         assert!(!target.path().join("buona.workspace.json").exists());
         assert!(!target.path().join("test.code-workspace").exists());
@@ -138,7 +163,9 @@ mod tests {
             .await
             .unwrap();
 
-        apply_template(template.path(), target.path()).await.unwrap();
+        apply_template(template.path(), target.path())
+            .await
+            .unwrap();
 
         let copied = target.path().join("run.sh");
         let perms = fs::metadata(&copied).await.unwrap().permissions();

@@ -278,11 +278,7 @@ pub(crate) async fn print_pretty(config: &BuonaConfig) -> Result<()> {
             );
         }
         if let Some(ref tmpl) = config.workspace_template {
-            println!(
-                "  {}  {}",
-                s.cyan.apply_to("Workspace Template:"),
-                tmpl
-            );
+            println!("  {}  {}", s.cyan.apply_to("Workspace Template:"), tmpl);
         }
         println!();
     }

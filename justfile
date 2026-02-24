@@ -29,11 +29,12 @@ ci:
     cargo clippy --all-targets --all-features -- -D warnings
     cargo test --all-targets --all-features
 
-# Run pre-release checks (formatting + linting)
+# Run pre-release checks (formatting + linting + tests)
 pre-release:
     @echo "Running pre-release checks..."
-    cargo fmt --all -- --check
+    cargo fmt --all
     cargo clippy --all-targets --all-features -- -D warnings
+    cargo test --all-targets --all-features
     @echo "Pre-release checks passed!"
 
 # Publish a release: bumps version, commits, tags, and pushes (triggers CI → release)

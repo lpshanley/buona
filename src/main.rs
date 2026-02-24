@@ -379,14 +379,16 @@ async fn main() -> anyhow::Result<()> {
             } => {
                 workspace::create(
                     Path::new(&path),
-                    name.as_deref(),
-                    packages.as_deref(),
-                    open,
-                    git_tracking,
-                    no_defaults,
-                    template.as_deref(),
-                    no_template,
-                    no_install,
+                    workspace::CreateOptions {
+                        name: name.as_deref(),
+                        packages: packages.as_deref(),
+                        open_ws: open,
+                        git_tracking,
+                        no_defaults,
+                        template_override: template.as_deref(),
+                        no_template,
+                        no_install,
+                    },
                 )
                 .await?;
             }

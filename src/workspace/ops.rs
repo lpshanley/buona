@@ -114,17 +114,30 @@ pub(crate) async fn list() -> Result<()> {
 ///
 /// After creation, if `packages` is provided, they are cloned into the workspace.
 /// If `open_ws` is true, the workspace is opened in the configured editor.
-pub(crate) async fn create(
-    path: &Path,
-    name: Option<&str>,
-    packages: Option<&[String]>,
-    open_ws: bool,
-    git_tracking: Option<GitTracking>,
-    no_defaults: bool,
-    template_override: Option<&str>,
-    no_template: bool,
-    no_install: bool,
-) -> Result<()> {
+#[derive(Debug, Default)]
+pub(crate) struct CreateOptions<'a> {
+    pub(crate) name: Option<&'a str>,
+    pub(crate) packages: Option<&'a [String]>,
+    pub(crate) open_ws: bool,
+    pub(crate) git_tracking: Option<GitTracking>,
+    pub(crate) no_defaults: bool,
+    pub(crate) template_override: Option<&'a str>,
+    pub(crate) no_template: bool,
+    pub(crate) no_install: bool,
+}
+
+pub(crate) async fn create(path: &Path, options: CreateOptions<'_>) -> Result<()> {
+    let CreateOptions {
+        name,
+        packages,
+        open_ws,
+        git_tracking,
+        no_defaults,
+        template_override,
+        no_template,
+        no_install,
+    } = options;
+
     let s = Styles::default();
 
     // Resolve the target directory
@@ -201,10 +214,7 @@ pub(crate) async fn create(
                         tmpl.display()
                     );
                     super::template::apply_template(&tmpl, &target).await?;
-                    println!(
-                        "  {} Applied workspace template",
-                        s.green.apply_to("✔"),
-                    );
+                    println!("  {} Applied workspace template", s.green.apply_to("✔"),);
                 }
                 Ok(tmpl) if !tmpl.exists() => {
                     println!(
@@ -239,9 +249,7 @@ pub(crate) async fn create(
     // Merge default packages with explicit packages.
     // Defaults come first, then any explicit packages not already in defaults.
     // Use --no-defaults to skip defaults entirely.
-    let explicit: Vec<String> = packages
-        .map(|p| p.to_vec())
-        .unwrap_or_default();
+    let explicit: Vec<String> = packages.map(|p| p.to_vec()).unwrap_or_default();
 
     let combined: Vec<String> = if !no_defaults && !cfg.default_packages.is_empty() {
         let mut merged = cfg.default_packages.clone();
@@ -262,10 +270,7 @@ pub(crate) async fn create(
 
     // Auto-run install after packages are added
     if packages_added && !no_install && target.join("buona.json").exists() {
-        println!(
-            "  {} Running install hook",
-            s.cyan.apply_to("→"),
-        );
+        println!("  {} Running install hook", s.cyan.apply_to("→"),);
         let status = tokio::process::Command::new(std::env::current_exe()?)
             .args(["run", "install"])
             .current_dir(&target)
@@ -274,10 +279,7 @@ pub(crate) async fn create(
             .context("failed to run install hook")?;
 
         if status.success() {
-            println!(
-                "  {} Install hook completed",
-                s.green.apply_to("✔"),
-            );
+            println!("  {} Install hook completed", s.green.apply_to("✔"),);
         } else {
             println!(
                 "  {} Install hook exited with status {}",
@@ -1077,25 +1079,24 @@ mod tests {
 
         create(
             &ws_path,
-            None,
-            None,
-            false,
-            None,
-            true,                                             // no_defaults (skip packages)
-            Some(template.path().to_str().unwrap()),          // template_override
-            false,                                            // no_template
-            true,                                             // no_install
+            CreateOptions {
+                no_defaults: true, // no_defaults (skip packages)
+                template_override: Some(template.path().to_str().unwrap()),
+                no_template: false,
+                no_install: true,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
 
         // CLAUDE.md should have been copied from the template
         let claude_md = ws_path.join("CLAUDE.md");
-        assert!(claude_md.exists(), "CLAUDE.md should exist after template apply");
-        assert_eq!(
-            std::fs::read_to_string(&claude_md).unwrap(),
-            "# Project"
+        assert!(
+            claude_md.exists(),
+            "CLAUDE.md should exist after template apply"
         );
+        assert_eq!(std::fs::read_to_string(&claude_md).unwrap(), "# Project");
     }
 
     #[tokio::test]
@@ -1109,14 +1110,13 @@ mod tests {
 
         create(
             &ws_path,
-            None,
-            None,
-            false,
-            None,
-            true,                                             // no_defaults
-            Some(template.path().to_str().unwrap()),          // template_override
-            true,                                             // no_template = true => skip
-            true,                                             // no_install
+            CreateOptions {
+                no_defaults: true,
+                template_override: Some(template.path().to_str().unwrap()),
+                no_template: true, // no_template = true => skip
+                no_install: true,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
