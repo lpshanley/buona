@@ -165,6 +165,22 @@ enum WorkspaceCommands {
         /// Git tracking mode for this workspace (overrides global default)
         #[arg(long, value_enum)]
         git_tracking: Option<config::GitTracking>,
+
+        /// Skip default packages from global config
+        #[arg(long)]
+        no_defaults: bool,
+
+        /// Path to a template directory (overrides global config workspace_template)
+        #[arg(long)]
+        template: Option<String>,
+
+        /// Skip workspace template
+        #[arg(long, conflicts_with = "template")]
+        no_template: bool,
+
+        /// Skip auto-running install after adding packages
+        #[arg(long)]
+        no_install: bool,
     },
 
     /// Delete a workspace
@@ -356,6 +372,10 @@ async fn main() -> anyhow::Result<()> {
                 packages,
                 open,
                 git_tracking,
+                no_defaults,
+                template,
+                no_template,
+                no_install,
             } => {
                 workspace::create(
                     Path::new(&path),
@@ -363,6 +383,10 @@ async fn main() -> anyhow::Result<()> {
                     packages.as_deref(),
                     open,
                     git_tracking,
+                    no_defaults,
+                    template.as_deref(),
+                    no_template,
+                    no_install,
                 )
                 .await?;
             }

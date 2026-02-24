@@ -120,6 +120,10 @@ pub(crate) async fn create(
     packages: Option<&[String]>,
     open_ws: bool,
     git_tracking: Option<GitTracking>,
+    no_defaults: bool,
+    template_override: Option<&str>,
+    no_template: bool,
+    no_install: bool,
 ) -> Result<()> {
     let s = Styles::default();
 
@@ -185,6 +189,42 @@ pub(crate) async fn create(
         );
     }
 
+    // Apply workspace template (non-fatal — warn on errors, don't abort creation)
+    if !no_template {
+        let tmpl_path_str = template_override.or(cfg.workspace_template.as_deref());
+        if let Some(tmpl_str) = tmpl_path_str {
+            match config::expand_tilde(tmpl_str) {
+                Ok(tmpl) if tmpl.is_dir() => {
+                    println!(
+                        "  {} Applying workspace template from {}",
+                        s.cyan.apply_to("→"),
+                        tmpl.display()
+                    );
+                    super::template::apply_template(&tmpl, &target).await?;
+                    println!(
+                        "  {} Applied workspace template",
+                        s.green.apply_to("✔"),
+                    );
+                }
+                Ok(tmpl) if !tmpl.exists() => {
+                    println!(
+                        "  {} Template path does not exist: {}",
+                        s.yellow.apply_to("⚠"),
+                        tmpl.display()
+                    );
+                }
+                Ok(_) => {} // exists but not a directory — silently skip
+                Err(e) => {
+                    println!(
+                        "  {} Could not resolve template path: {}",
+                        s.yellow.apply_to("⚠"),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
     // Auto-sync the .code-workspace file
     sync_workspace_file(&target, &meta).await?;
 
@@ -196,11 +236,55 @@ pub(crate) async fn create(
     );
     println!("  {}  {}", s.dim.apply_to("Location:"), target.display());
 
-    // Add packages if specified
-    if let Some(pkgs) = packages
-        && !pkgs.is_empty()
-    {
-        add_packages_to_workspace(&target, pkgs).await?;
+    // Merge default packages with explicit packages.
+    // Defaults come first, then any explicit packages not already in defaults.
+    // Use --no-defaults to skip defaults entirely.
+    let explicit: Vec<String> = packages
+        .map(|p| p.to_vec())
+        .unwrap_or_default();
+
+    let combined: Vec<String> = if !no_defaults && !cfg.default_packages.is_empty() {
+        let mut merged = cfg.default_packages.clone();
+        for pkg in &explicit {
+            if !merged.contains(pkg) {
+                merged.push(pkg.clone());
+            }
+        }
+        merged
+    } else {
+        explicit
+    };
+
+    let packages_added = !combined.is_empty();
+    if packages_added {
+        add_packages_to_workspace(&target, &combined).await?;
+    }
+
+    // Auto-run install after packages are added
+    if packages_added && !no_install && target.join("buona.json").exists() {
+        println!(
+            "  {} Running install hook",
+            s.cyan.apply_to("→"),
+        );
+        let status = tokio::process::Command::new(std::env::current_exe()?)
+            .args(["run", "install"])
+            .current_dir(&target)
+            .status()
+            .await
+            .context("failed to run install hook")?;
+
+        if status.success() {
+            println!(
+                "  {} Install hook completed",
+                s.green.apply_to("✔"),
+            );
+        } else {
+            println!(
+                "  {} Install hook exited with status {}",
+                s.yellow.apply_to("⚠"),
+                status,
+            );
+        }
     }
 
     // Open workspace in editor if requested
@@ -979,4 +1063,68 @@ mod tests {
     }
 
     // path parsing/value parsing is tested in `path_value` unit tests.
+
+    // ── create + template tests ───────────────────────────────────
+
+    #[tokio::test]
+    async fn create_applies_template_when_configured() {
+        let parent = TempDir::new().unwrap();
+        let ws_path = parent.path().join("my-ws");
+
+        // Create a template directory with a CLAUDE.md
+        let template = TempDir::new().unwrap();
+        std::fs::write(template.path().join("CLAUDE.md"), "# Project").unwrap();
+
+        create(
+            &ws_path,
+            None,
+            None,
+            false,
+            None,
+            true,                                             // no_defaults (skip packages)
+            Some(template.path().to_str().unwrap()),          // template_override
+            false,                                            // no_template
+            true,                                             // no_install
+        )
+        .await
+        .unwrap();
+
+        // CLAUDE.md should have been copied from the template
+        let claude_md = ws_path.join("CLAUDE.md");
+        assert!(claude_md.exists(), "CLAUDE.md should exist after template apply");
+        assert_eq!(
+            std::fs::read_to_string(&claude_md).unwrap(),
+            "# Project"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_skips_template_when_no_template_flag() {
+        let parent = TempDir::new().unwrap();
+        let ws_path = parent.path().join("skip-tmpl-ws");
+
+        // Create a template directory with a CLAUDE.md
+        let template = TempDir::new().unwrap();
+        std::fs::write(template.path().join("CLAUDE.md"), "# Should Not Appear").unwrap();
+
+        create(
+            &ws_path,
+            None,
+            None,
+            false,
+            None,
+            true,                                             // no_defaults
+            Some(template.path().to_str().unwrap()),          // template_override
+            true,                                             // no_template = true => skip
+            true,                                             // no_install
+        )
+        .await
+        .unwrap();
+
+        // CLAUDE.md should NOT exist because no_template was true
+        assert!(
+            !ws_path.join("CLAUDE.md").exists(),
+            "CLAUDE.md should not exist when no_template is true"
+        );
+    }
 }

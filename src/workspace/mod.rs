@@ -11,6 +11,7 @@ mod ops;
 mod packages;
 mod remove_packages;
 mod sync_packages;
+mod template;
 mod types;
 mod vscode;
 mod workspace_file;
