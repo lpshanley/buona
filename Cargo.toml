@@ -1,6 +1,6 @@
 [package]
 name = "buona"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 description = "The Good CLI — making life easier when managing complex workspace and build tasks"
 license = "MIT"
