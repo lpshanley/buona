@@ -48,14 +48,6 @@ pub(crate) async fn list() -> Result<()> {
     println!("  {}", s.bold.apply_to("Workspaces"));
     println!("  {}", s.dim.apply_to("──────────"));
 
-    if !workspace_dir.exists() {
-        bail!(
-            "workspace directory does not exist: {}\n  Run {} to configure it.",
-            workspace_dir.display(),
-            "buona config setup",
-        );
-    }
-
     let mut entries = tokio::fs::read_dir(&workspace_dir).await.with_context(|| {
         format!(
             "could not read workspace directory: {}",

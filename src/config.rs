@@ -183,7 +183,13 @@ pub(crate) fn expand_tilde(path: &str) -> Result<PathBuf> {
 /// Resolve the workspace directory from the config, expanding `~`.
 pub(crate) async fn workspace_dir() -> Result<PathBuf> {
     let cfg = load_config().await?;
-    expand_tilde(&cfg.workspace_dir)
+    let dir = expand_tilde(&cfg.workspace_dir)?;
+    if !dir.exists() {
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .with_context(|| format!("could not create workspace directory: {}", dir.display()))?;
+    }
+    Ok(dir)
 }
 
 /// Returns the buona config directory: ~/.config/buona/
