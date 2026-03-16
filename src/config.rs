@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use clap::ValueEnum;
 use dialoguer::{Input, Select};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Supported IDE options.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -439,6 +440,30 @@ pub(crate) async fn get_value(key: &str) -> Result<()> {
     let tokens = path_value::parse_path(key)?;
     let found = path_value::get_path(&value, &tokens)?;
     path_value::print_value(found)
+}
+
+/// Add values to a list field in the global config.
+pub(crate) async fn add_to_list(key: &str, values: &[String]) -> Result<()> {
+    let cfg = load_config().await?;
+    let mut doc = serde_json::to_value(&cfg)?;
+    let tokens = path_value::parse_path(key)?;
+    let json_values = values.iter().map(|v| Value::String(v.clone())).collect();
+    path_value::append_to_array(&mut doc, &tokens, json_values)?;
+    let next: BuonaConfig = serde_json::from_value(doc)?;
+    save_config(&next).await?;
+    Ok(())
+}
+
+/// Remove values from a list field in the global config.
+pub(crate) async fn remove_from_list(key: &str, values: &[String]) -> Result<()> {
+    let cfg = load_config().await?;
+    let mut doc = serde_json::to_value(&cfg)?;
+    let tokens = path_value::parse_path(key)?;
+    let json_values: Vec<Value> = values.iter().map(|v| Value::String(v.clone())).collect();
+    path_value::remove_from_array(&mut doc, &tokens, &json_values)?;
+    let next: BuonaConfig = serde_json::from_value(doc)?;
+    save_config(&next).await?;
+    Ok(())
 }
 
 /// Unset a global config value by key path.

@@ -138,6 +138,26 @@ enum ConfigCommands {
         /// Configuration key path (e.g. git.host)
         key: String,
     },
+
+    /// Add values to a list configuration field (e.g. default_packages)
+    Add {
+        /// Configuration key path (e.g. default_packages)
+        key: String,
+
+        /// Values to add
+        #[arg(required = true)]
+        values: Vec<String>,
+    },
+
+    /// Remove values from a list configuration field (e.g. default_packages)
+    Remove {
+        /// Configuration key path (e.g. default_packages)
+        key: String,
+
+        /// Values to remove
+        #[arg(required = true)]
+        values: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -316,6 +336,34 @@ enum WorkspaceConfigCommands {
         #[arg(short, long)]
         workspace: Option<String>,
     },
+
+    /// Add values to a list workspace configuration field
+    Add {
+        /// Configuration key path
+        key: String,
+
+        /// Values to add
+        #[arg(required = true)]
+        values: Vec<String>,
+
+        /// Workspace name or directory (defaults to detecting from the current directory)
+        #[arg(short, long)]
+        workspace: Option<String>,
+    },
+
+    /// Remove values from a list workspace configuration field
+    Remove {
+        /// Configuration key path
+        key: String,
+
+        /// Values to remove
+        #[arg(required = true)]
+        values: Vec<String>,
+
+        /// Workspace name or directory (defaults to detecting from the current directory)
+        #[arg(short, long)]
+        workspace: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -360,6 +408,12 @@ async fn main() -> anyhow::Result<()> {
             }
             ConfigCommands::Unset { key } => {
                 config::unset_value(&key).await?;
+            }
+            ConfigCommands::Add { key, values } => {
+                config::add_to_list(&key, &values).await?;
+            }
+            ConfigCommands::Remove { key, values } => {
+                config::remove_from_list(&key, &values).await?;
             }
         },
         Commands::Workspace { command } => match command {
@@ -433,6 +487,20 @@ async fn main() -> anyhow::Result<()> {
                 }
                 WorkspaceConfigCommands::Unset { key, workspace } => {
                     workspace::config_unset(&key, workspace.as_deref()).await?;
+                }
+                WorkspaceConfigCommands::Add {
+                    key,
+                    values,
+                    workspace,
+                } => {
+                    workspace::config_add(&key, &values, workspace.as_deref()).await?;
+                }
+                WorkspaceConfigCommands::Remove {
+                    key,
+                    values,
+                    workspace,
+                } => {
+                    workspace::config_remove(&key, &values, workspace.as_deref()).await?;
                 }
             },
             WorkspaceCommands::Info { workspace, json } => {

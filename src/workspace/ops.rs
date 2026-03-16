@@ -457,6 +457,72 @@ pub(crate) async fn config_unset(key: &str, workspace: Option<&str>) -> Result<(
     Ok(())
 }
 
+/// Add values to a list field in the workspace config.
+pub(crate) async fn config_add(
+    key: &str,
+    values: &[String],
+    workspace: Option<&str>,
+) -> Result<()> {
+    let s = Styles::default();
+    let ws_root = resolve_workspace_target(workspace).await?;
+    let meta = read_meta(&ws_root)
+        .await?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+    let mut doc = serde_json::to_value(&meta)?;
+    let tokens = path_value::parse_path(key)?;
+    let json_values = values
+        .iter()
+        .map(|v| serde_json::Value::String(v.clone()))
+        .collect();
+    path_value::append_to_array(&mut doc, &tokens, json_values)?;
+    let next: WorkspaceMeta = serde_json::from_value(doc)?;
+    write_meta(&ws_root, &next).await?;
+    let ws_file_path = sync_workspace_file(&ws_root, &next).await?;
+
+    println!("  {} Updated workspace config", s.green.apply_to("✔"));
+    println!(
+        "  {} Synced {}",
+        s.dim.apply_to("→"),
+        ws_file_path.display()
+    );
+    println!();
+
+    Ok(())
+}
+
+/// Remove values from a list field in the workspace config.
+pub(crate) async fn config_remove(
+    key: &str,
+    values: &[String],
+    workspace: Option<&str>,
+) -> Result<()> {
+    let s = Styles::default();
+    let ws_root = resolve_workspace_target(workspace).await?;
+    let meta = read_meta(&ws_root)
+        .await?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+    let mut doc = serde_json::to_value(&meta)?;
+    let tokens = path_value::parse_path(key)?;
+    let json_values: Vec<serde_json::Value> = values
+        .iter()
+        .map(|v| serde_json::Value::String(v.clone()))
+        .collect();
+    path_value::remove_from_array(&mut doc, &tokens, &json_values)?;
+    let next: WorkspaceMeta = serde_json::from_value(doc)?;
+    write_meta(&ws_root, &next).await?;
+    let ws_file_path = sync_workspace_file(&ws_root, &next).await?;
+
+    println!("  {} Updated workspace config", s.green.apply_to("✔"));
+    println!(
+        "  {} Synced {}",
+        s.dim.apply_to("→"),
+        ws_file_path.display()
+    );
+    println!();
+
+    Ok(())
+}
+
 /// Adopt an existing local directory into the workspace.
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
