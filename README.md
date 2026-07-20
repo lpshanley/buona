@@ -11,7 +11,7 @@
 
 - **Workspace management** — Create, list, inspect, rename, and delete workspaces.
 - **Package management** — Add and remove packages (git repositories) within workspaces.
-- **Automatic workspace file sync** — The `.code-workspace` file is automatically regenerated whenever packages are added, removed, or a workspace is created — no manual sync step needed.
+- **Automatic workspace file sync** — The `.code-workspace` file is automatically regenerated whenever packages are added, removed, or a workspace is created — no manual sync step needed. Only the `folders` list is rewritten; any `settings` or other customizations you add to the file are preserved.
 - **Sync & pull** — Pull the latest changes for every package in a workspace with a single command.
 - **Editor integration** — Open a workspace directly in VS Code or Cursor.
 - **Global configuration** — A simple config file (`~/.config/buona/config.json`) keeps your preferences consistent across projects.
@@ -319,7 +319,7 @@ buona run install --dry-run -r
 ```
 
 **Options:**
-- `--system <SYSTEM>` — Force a specific build system (overrides auto-detection)
+- `--system <SYSTEM>` — Force a specific build system (overrides auto-detection and the global `system` in `buona.json`; per-command `commands.<name>.system` overrides still win)
 - `--dry-run` — Show the resolved command without executing it
 - `--verbose` — Print detailed resolution information
 - `--target <root|PACKAGE>` / `-t` — Run only for the provided target(s), in the order provided
@@ -330,6 +330,10 @@ buona run install --dry-run -r
 - `--` — Pass remaining arguments to the underlying tool
 
 When `--dry-run` is used with `-t` or `-r`, buona prints a staged execution graph and renders missing leaves as dimmed `noop` (e.g., no pre/post hook for that stage). If a command stage cannot be resolved (for example no build system detected), it is shown as `skipped` and `--verbose` includes the reason.
+
+**Build system precedence** (most specific wins): `commands.<name>.system` in `buona.json` → CLI `--system` → global `system` in `buona.json` → auto-detection from marker files.
+
+When a single target runs serially (the common `buona run build` case), the child process inherits the terminal directly, so progress bars, colors, and interactive prompts work as usual. With multiple targets, `--parallel`, or `-r`, output is streamed line-by-line with a `[target:<name>/<stage>]` prefix.
 
 **Supported build systems:**
 | System | Marker Files | Notes |
@@ -639,11 +643,12 @@ Commands:
 buona self update [OPTIONS] [VERSION]
 ```
 
-Checks for the latest release on GitHub and installs it, replacing the current binary. Downloads the prebuilt archive for your platform, verifies the SHA-256 checksum, and performs an atomic binary replacement.
+Checks for the latest release on GitHub and installs it, replacing the current binary. Downloads the prebuilt archive for your platform, verifies the SHA-256 checksum, and performs an atomic binary replacement. Installs without a checksum are refused unless `--force-insecure` is passed.
 
 **Options:**
 - `--check` — Only check for updates without installing
 - `--yes` / `-y` — Skip the confirmation prompt
+- `--force-insecure` — Allow install when the release has no `.sha256` checksum asset (not recommended)
 
 **Examples:**
 ```sh
@@ -659,6 +664,9 @@ buona self update --yes
 # Install a specific version
 buona self update v0.1.5
 buona self update 0.1.5
+
+# Override missing checksum (not recommended)
+buona self update --force-insecure
 ```
 
 ## Configuration
@@ -690,7 +698,7 @@ Complete `~/.config/buona/config.json` template:
 }
 ```
 
-Unknown keys are ignored when reading config files and are not written back, so legacy/abandoned keys are automatically dropped the next time buona saves config.
+Unknown keys are ignored when reading config files and are not written back, so legacy/abandoned keys are automatically dropped the next time buona saves config. `config set`/`add`/`remove` reject unknown keys instead of silently discarding them, so a typo'd key name is an error rather than a no-op.
 
 ## Workspace metadata
 

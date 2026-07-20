@@ -4,19 +4,13 @@ use std::env;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use tokio::process::Command;
 
-use crate::config;
-use crate::config::GitTracking;
+use crate::config::{BuonaConfig, GitTracking};
+use crate::fsutil;
 use crate::styles::Styles;
 
-use super::types::{WorkspaceMeta, read_meta};
+use super::types::read_meta;
 use super::workspace_file::sync_workspace_file;
-
-/// Resolve the effective git tracking mode for a workspace.
-fn resolve_git_tracking(meta: &WorkspaceMeta, cfg: &config::BuonaConfig) -> GitTracking {
-    meta.git_tracking.unwrap_or(cfg.git.tracking)
-}
 
 /// Adopt an existing local directory into the workspace.
 ///
@@ -28,6 +22,7 @@ pub(super) async fn adopt_into_workspace(
     path: &Path,
     copy: bool,
     name_override: Option<&str>,
+    cfg: &BuonaConfig,
 ) -> Result<()> {
     let s = Styles::default();
 
@@ -44,18 +39,21 @@ pub(super) async fn adopt_into_workspace(
             .join(path)
     };
 
-    if !source.exists() {
+    if !tokio::fs::try_exists(&source).await.unwrap_or(false) {
         bail!("path does not exist: {}", source.display());
     }
-    if !source.is_dir() {
+    let source_meta = tokio::fs::metadata(&source)
+        .await
+        .with_context(|| format!("could not read path: {}", source.display()))?;
+    if !source_meta.is_dir() {
         bail!(
             "path is not a directory: {}\n  The adopt command requires a directory path.",
             source.display()
         );
     }
 
-    let source = source
-        .canonicalize()
+    let source = tokio::fs::canonicalize(&source)
+        .await
         .with_context(|| format!("could not resolve path: {}", source.display()))?;
 
     // Derive the package name
@@ -72,9 +70,9 @@ pub(super) async fn adopt_into_workspace(
     let dest = src_dir.join(&pkg_name);
 
     // Check if the directory is already at the correct location
-    let already_in_place = dest.exists()
-        && dest
-            .canonicalize()
+    let already_in_place = tokio::fs::try_exists(&dest).await.unwrap_or(false)
+        && tokio::fs::canonicalize(&dest)
+            .await
             .ok()
             .map(|d| d == source)
             .unwrap_or(false);
@@ -92,7 +90,7 @@ pub(super) async fn adopt_into_workspace(
             .await
             .with_context(|| format!("could not create src directory: {}", src_dir.display()))?;
 
-        if dest.exists() {
+        if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
             bail!(
                 "destination already exists: {}\n  \
                  A directory with the name \"{}\" is already in src/. \
@@ -110,17 +108,7 @@ pub(super) async fn adopt_into_workspace(
                 s.dim.apply_to(dest.display().to_string())
             );
 
-            let status = Command::new("cp")
-                .args(["-a"])
-                .arg(&source)
-                .arg(&dest)
-                .status()
-                .await
-                .context("failed to execute cp — is it available on your system?")?;
-
-            if !status.success() {
-                bail!("cp failed with {status}");
-            }
+            copy_dir_into(&source, &dest).await?;
         } else {
             println!(
                 "  {} Moving {} to {} ...",
@@ -132,17 +120,7 @@ pub(super) async fn adopt_into_workspace(
             // Try tokio::fs::rename first (fast, same-filesystem only)
             if tokio::fs::rename(&source, &dest).await.is_err() {
                 // Fall back to copy + delete for cross-device moves
-                let status = Command::new("cp")
-                    .args(["-a"])
-                    .arg(&source)
-                    .arg(&dest)
-                    .status()
-                    .await
-                    .context("failed to execute cp — is it available on your system?")?;
-
-                if !status.success() {
-                    bail!("cp failed with {status}");
-                }
+                copy_dir_into(&source, &dest).await?;
 
                 tokio::fs::remove_dir_all(&source).await.with_context(|| {
                     format!(
@@ -155,11 +133,12 @@ pub(super) async fn adopt_into_workspace(
     }
 
     // If workspace-level tracking, remove the adopted package's .git directory
-    let cfg = config::load_config().await?;
-    let tracking = resolve_git_tracking(&meta, &cfg);
-    if tracking == GitTracking::Workspace {
+    if meta.effective_tracking(cfg) == GitTracking::Workspace {
         let adopted_git_dir = dest.join(".git");
-        if adopted_git_dir.exists() {
+        if tokio::fs::try_exists(&adopted_git_dir)
+            .await
+            .unwrap_or(false)
+        {
             tokio::fs::remove_dir_all(&adopted_git_dir)
                 .await
                 .with_context(|| {
@@ -186,6 +165,21 @@ pub(super) async fn adopt_into_workspace(
     );
     println!("  {}  {}", s.dim.apply_to("Location:"), dest.display());
     println!();
+
+    Ok(())
+}
+
+/// Copy a directory into a fresh destination, cleaning up on failure so a
+/// half-copied package never lingers in `src/`.
+async fn copy_dir_into(source: &Path, dest: &Path) -> Result<()> {
+    tokio::fs::create_dir_all(dest)
+        .await
+        .with_context(|| format!("could not create directory: {}", dest.display()))?;
+
+    if let Err(e) = fsutil::copy_dir_recursive(source, dest, |_| false).await {
+        let _ = tokio::fs::remove_dir_all(dest).await;
+        return Err(e);
+    }
 
     Ok(())
 }

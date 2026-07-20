@@ -33,13 +33,6 @@ async fn resolve_workspace_target(workspace: Option<&str>) -> Result<PathBuf> {
     locator::resolve_workspace_target(workspace).await
 }
 
-/// Resolve the effective git tracking mode for a workspace.
-///
-/// Priority: workspace-level override > global config default > hardcoded Package.
-fn resolve_git_tracking(meta: &WorkspaceMeta, cfg: &config::BuonaConfig) -> GitTracking {
-    meta.git_tracking.unwrap_or(cfg.git.tracking)
-}
-
 /// List all workspaces (directories) found in the configured workspace directory.
 pub(crate) async fn list() -> Result<()> {
     let workspace_dir = config::workspace_dir().await?;
@@ -150,86 +143,33 @@ pub(crate) async fn create(path: &Path, options: CreateOptions<'_>) -> Result<()
             .into_owned(),
     };
 
-    if target.exists() {
+    if tokio::fs::try_exists(&target).await.unwrap_or(false) {
         bail!("directory already exists: {}", target.display());
     }
+
+    let meta = WorkspaceMeta {
+        name: ws_name,
+        git_tracking,
+        mount_root: None,
+    };
 
     // Create the workspace directory (and any parent directories)
     tokio::fs::create_dir_all(&target)
         .await
         .with_context(|| format!("could not create workspace directory: {}", target.display()))?;
 
-    // Create the src/ directory for packages
-    tokio::fs::create_dir_all(target.join("src"))
-        .await
-        .with_context(|| {
-            format!(
-                "could not create src directory: {}",
-                target.join("src").display()
-            )
-        })?;
+    // Structural setup: if anything here fails, remove the partial tree so the
+    // user is not left with a half-built workspace that `create` refuses to
+    // overwrite on retry.
+    if let Err(e) = setup_new_workspace(&target, &meta, &s, template_override, no_template).await {
+        let _ = tokio::fs::remove_dir_all(&target).await;
+        return Err(e).context(format!(
+            "workspace creation failed; removed partial directory {}",
+            target.display()
+        ));
+    }
 
-    // Write the workspace metadata file
-    let meta = WorkspaceMeta {
-        name: ws_name,
-        git_tracking,
-        mount_root: None,
-    };
-    write_meta(&target, &meta).await?;
-
-    // Initialize git at workspace root if workspace-level tracking is active
     let cfg = config::load_config().await?;
-    let tracking = resolve_git_tracking(&meta, &cfg);
-
-    if tracking == GitTracking::Workspace {
-        let output = git_ops::init_repo(&target).await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("git init failed: {}", stderr.trim());
-        }
-
-        println!(
-            "  {} Initialized git repository at workspace root",
-            s.green.apply_to("✔"),
-        );
-    }
-
-    // Apply workspace template (non-fatal — warn on errors, don't abort creation)
-    if !no_template {
-        let tmpl_path_str = template_override.or(cfg.workspace_template.as_deref());
-        if let Some(tmpl_str) = tmpl_path_str {
-            match config::expand_tilde(tmpl_str) {
-                Ok(tmpl) if tmpl.is_dir() => {
-                    println!(
-                        "  {} Applying workspace template from {}",
-                        s.cyan.apply_to("→"),
-                        tmpl.display()
-                    );
-                    super::template::apply_template(&tmpl, &target).await?;
-                    println!("  {} Applied workspace template", s.green.apply_to("✔"),);
-                }
-                Ok(tmpl) if !tmpl.exists() => {
-                    println!(
-                        "  {} Template path does not exist: {}",
-                        s.yellow.apply_to("⚠"),
-                        tmpl.display()
-                    );
-                }
-                Ok(_) => {} // exists but not a directory — silently skip
-                Err(e) => {
-                    println!(
-                        "  {} Could not resolve template path: {}",
-                        s.yellow.apply_to("⚠"),
-                        e
-                    );
-                }
-            }
-        }
-    }
-
-    // Auto-sync the .code-workspace file
-    sync_workspace_file(&target, &meta).await?;
 
     println!();
     println!(
@@ -258,11 +198,16 @@ pub(crate) async fn create(path: &Path, options: CreateOptions<'_>) -> Result<()
 
     let packages_added = !combined.is_empty();
     if packages_added {
-        add_packages_to_workspace(&target, &combined).await?;
+        add_packages_to_workspace(&target, &combined, &cfg).await?;
     }
 
     // Auto-run install after packages are added
-    if packages_added && !no_install && target.join("buona.json").exists() {
+    if packages_added
+        && !no_install
+        && tokio::fs::try_exists(target.join("buona.json"))
+            .await
+            .unwrap_or(false)
+    {
         println!("  {} Running install hook", s.cyan.apply_to("→"),);
         let status = tokio::process::Command::new(std::env::current_exe()?)
             .args(["run", "install"])
@@ -284,10 +229,98 @@ pub(crate) async fn create(path: &Path, options: CreateOptions<'_>) -> Result<()
 
     // Open workspace in editor if requested
     if open_ws {
-        open_workspace_at(&target).await?;
+        open_workspace_at(&target, &cfg).await?;
     }
 
     println!();
+    Ok(())
+}
+
+/// Write metadata, optionally init git, apply template, and sync the
+/// `.code-workspace` file for a freshly created workspace directory.
+async fn setup_new_workspace(
+    target: &Path,
+    meta: &WorkspaceMeta,
+    s: &Styles,
+    template_override: Option<&str>,
+    no_template: bool,
+) -> Result<()> {
+    // Create the src/ directory for packages
+    tokio::fs::create_dir_all(target.join("src"))
+        .await
+        .with_context(|| {
+            format!(
+                "could not create src directory: {}",
+                target.join("src").display()
+            )
+        })?;
+
+    write_meta(target, meta).await?;
+
+    let cfg = config::load_config().await?;
+
+    if meta.effective_tracking(&cfg) == GitTracking::Workspace {
+        let output = git_ops::init_repo(target).await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("git init failed: {}", stderr.trim());
+        }
+
+        println!(
+            "  {} Initialized git repository at workspace root",
+            s.green.apply_to("✔"),
+        );
+    }
+
+    // Apply workspace template (non-fatal — warn on errors, don't abort creation)
+    if !no_template {
+        let tmpl_path_str = template_override.or(cfg.workspace_template.as_deref());
+        if let Some(tmpl_str) = tmpl_path_str {
+            match config::expand_tilde(tmpl_str) {
+                Ok(tmpl) => {
+                    let is_dir = tokio::fs::metadata(&tmpl)
+                        .await
+                        .map(|m| m.is_dir())
+                        .unwrap_or(false);
+                    if is_dir {
+                        println!(
+                            "  {} Applying workspace template from {}",
+                            s.cyan.apply_to("→"),
+                            tmpl.display()
+                        );
+                        match super::template::apply_template(&tmpl, target).await {
+                            Ok(()) => {
+                                println!("  {} Applied workspace template", s.green.apply_to("✔"),);
+                            }
+                            Err(e) => {
+                                println!(
+                                    "  {} Could not apply workspace template: {e:#}",
+                                    s.yellow.apply_to("⚠"),
+                                );
+                            }
+                        }
+                    } else if !tokio::fs::try_exists(&tmpl).await.unwrap_or(false) {
+                        println!(
+                            "  {} Template path does not exist: {}",
+                            s.yellow.apply_to("⚠"),
+                            tmpl.display()
+                        );
+                    }
+                    // exists but not a directory — silently skip
+                }
+                Err(e) => {
+                    println!(
+                        "  {} Could not resolve template path: {}",
+                        s.yellow.apply_to("⚠"),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    sync_workspace_file(target, meta).await?;
     Ok(())
 }
 
@@ -415,25 +448,9 @@ async fn rename_workspace_at(source: &Path, new_name: &str, keep_directory: bool
         dest
     };
 
-    // Remove the stale `.code-workspace` file before regenerating it under the
-    // new name
-    if sanitize_name(&old_name) != sanitize_name(new_name) {
-        let old_ws_file = source.join(format!("{}.code-workspace", sanitize_name(&old_name)));
-        if tokio::fs::try_exists(&old_ws_file).await.unwrap_or(false) {
-            tokio::fs::remove_file(&old_ws_file)
-                .await
-                .with_context(|| {
-                    format!(
-                        "could not remove old workspace file: {}",
-                        old_ws_file.display()
-                    )
-                })?;
-        }
-    }
-
-    meta.name = new_name.to_string();
-    write_meta(source, &meta).await?;
-
+    // Rename the directory first: it is the step most likely to fail, and
+    // doing it before touching metadata means a failure leaves the workspace
+    // fully intact under its old identity.
     if target != *source {
         tokio::fs::rename(source, &target).await.with_context(|| {
             format!(
@@ -443,6 +460,27 @@ async fn rename_workspace_at(source: &Path, new_name: &str, keep_directory: bool
             )
         })?;
     }
+
+    // Carry the old `.code-workspace` file over to the new filename so any
+    // user settings inside it survive; sync_workspace_file then rewrites only
+    // the folders list.
+    if sanitize_name(&old_name) != sanitize_name(new_name) {
+        let old_ws_file = target.join(format!("{}.code-workspace", sanitize_name(&old_name)));
+        let new_ws_file = target.join(format!("{}.code-workspace", sanitize_name(new_name)));
+        if tokio::fs::try_exists(&old_ws_file).await.unwrap_or(false) {
+            tokio::fs::rename(&old_ws_file, &new_ws_file)
+                .await
+                .with_context(|| {
+                    format!(
+                        "could not move old workspace file: {}",
+                        old_ws_file.display()
+                    )
+                })?;
+        }
+    }
+
+    meta.name = new_name.to_string();
+    write_meta(&target, &meta).await?;
 
     let ws_file_path = sync_workspace_file(&target, &meta).await?;
 
@@ -470,7 +508,8 @@ async fn rename_workspace_at(source: &Path, new_name: &str, keep_directory: bool
 /// Otherwise, the workspace is detected from the current working directory.
 pub(crate) async fn add(packages: &[String], workspace: Option<&str>) -> Result<()> {
     let ws_root = resolve_workspace_target(workspace).await?;
-    add_packages_to_workspace(&ws_root, packages).await
+    let cfg = config::load_config().await?;
+    add_packages_to_workspace(&ws_root, packages, &cfg).await
 }
 
 /// Remove one or more packages from a workspace.
@@ -497,7 +536,8 @@ pub(crate) async fn sync(
     fetch_only: bool,
 ) -> Result<PathBuf> {
     let ws_root = resolve_workspace_target(workspace).await?;
-    sync_workspace(&ws_root, packages, fetch_only).await
+    let cfg = config::load_config().await?;
+    sync_workspace(&ws_root, packages, fetch_only, &cfg).await
 }
 
 /// Pretty-print detailed information about a workspace.
@@ -515,27 +555,28 @@ pub(crate) async fn info(workspace: Option<&str>, json: bool) -> Result<()> {
 /// Otherwise, the workspace is detected from the current working directory.
 pub(crate) async fn open(workspace: Option<&str>) -> Result<()> {
     let ws_root = resolve_workspace_target(workspace).await?;
-    open_workspace_at(&ws_root).await
+    let cfg = config::load_config().await?;
+    open_workspace_at(&ws_root, &cfg).await
 }
 
-/// Set a workspace configuration value.
-pub(crate) async fn config_set(
-    key: &str,
-    value: Option<&str>,
-    json_mode: bool,
-    workspace: Option<&str>,
-) -> Result<()> {
+/// Resolve a workspace, apply `mutate` to its metadata JSON, validate
+/// strictly, write it back, and re-sync the `.code-workspace` file.
+///
+/// Strict validation means a mutation that introduces a key the metadata
+/// struct doesn't know about (e.g. a typo'd `set`) errors instead of being
+/// silently dropped on save.
+async fn update_workspace_config<F>(workspace: Option<&str>, mutate: F) -> Result<()>
+where
+    F: FnOnce(&mut serde_json::Value) -> Result<()>,
+{
     let s = Styles::default();
     let ws_root = resolve_workspace_target(workspace).await?;
     let meta = read_meta(&ws_root)
         .await?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
     let mut doc = serde_json::to_value(&meta)?;
-    let tokens = path_value::parse_path(key)?;
-    let current = path_value::get_path(&doc, &tokens).ok();
-    let parsed = path_value::parse_set_value(value, json_mode, current)?;
-    path_value::set_path(&mut doc, &tokens, parsed)?;
-    let next: WorkspaceMeta = serde_json::from_value(doc)?;
+    mutate(&mut doc)?;
+    let next: WorkspaceMeta = path_value::from_value_strict(doc)?;
 
     write_meta(&ws_root, &next).await?;
     let ws_file_path = sync_workspace_file(&ws_root, &next).await?;
@@ -548,6 +589,22 @@ pub(crate) async fn config_set(
     println!();
 
     Ok(())
+}
+
+/// Set a workspace configuration value.
+pub(crate) async fn config_set(
+    key: &str,
+    value: Option<&str>,
+    json_mode: bool,
+    workspace: Option<&str>,
+) -> Result<()> {
+    let tokens = path_value::parse_path(key)?;
+    update_workspace_config(workspace, |doc| {
+        let current = path_value::get_path(doc, &tokens).ok().cloned();
+        let parsed = path_value::parse_set_value(value, json_mode, current.as_ref())?;
+        path_value::set_path(doc, &tokens, parsed)
+    })
+    .await
 }
 
 /// Get a workspace configuration value.
@@ -564,27 +621,8 @@ pub(crate) async fn config_get(key: &str, workspace: Option<&str>) -> Result<()>
 
 /// Reset a workspace configuration value to default.
 pub(crate) async fn config_unset(key: &str, workspace: Option<&str>) -> Result<()> {
-    let s = Styles::default();
-    let ws_root = resolve_workspace_target(workspace).await?;
-    let meta = read_meta(&ws_root)
-        .await?
-        .context("could not read workspace metadata — is this a valid buona workspace?")?;
-    let mut doc = serde_json::to_value(meta)?;
     let tokens = path_value::parse_path(key)?;
-    path_value::unset_path(&mut doc, &tokens)?;
-    let next: WorkspaceMeta = serde_json::from_value(doc)?;
-    write_meta(&ws_root, &next).await?;
-    let ws_file_path = sync_workspace_file(&ws_root, &next).await?;
-
-    println!("  {} Updated workspace config", s.green.apply_to("✔"));
-    println!(
-        "  {} Synced {}",
-        s.dim.apply_to("→"),
-        ws_file_path.display()
-    );
-    println!();
-
-    Ok(())
+    update_workspace_config(workspace, |doc| path_value::unset_path(doc, &tokens)).await
 }
 
 /// Add values to a list field in the workspace config.
@@ -593,31 +631,15 @@ pub(crate) async fn config_add(
     values: &[String],
     workspace: Option<&str>,
 ) -> Result<()> {
-    let s = Styles::default();
-    let ws_root = resolve_workspace_target(workspace).await?;
-    let meta = read_meta(&ws_root)
-        .await?
-        .context("could not read workspace metadata — is this a valid buona workspace?")?;
-    let mut doc = serde_json::to_value(&meta)?;
     let tokens = path_value::parse_path(key)?;
-    let json_values = values
-        .iter()
-        .map(|v| serde_json::Value::String(v.clone()))
-        .collect();
-    path_value::append_to_array(&mut doc, &tokens, json_values)?;
-    let next: WorkspaceMeta = serde_json::from_value(doc)?;
-    write_meta(&ws_root, &next).await?;
-    let ws_file_path = sync_workspace_file(&ws_root, &next).await?;
-
-    println!("  {} Updated workspace config", s.green.apply_to("✔"));
-    println!(
-        "  {} Synced {}",
-        s.dim.apply_to("→"),
-        ws_file_path.display()
-    );
-    println!();
-
-    Ok(())
+    update_workspace_config(workspace, |doc| {
+        let json_values = values
+            .iter()
+            .map(|v| serde_json::Value::String(v.clone()))
+            .collect();
+        path_value::append_to_array(doc, &tokens, json_values)
+    })
+    .await
 }
 
 /// Remove values from a list field in the workspace config.
@@ -626,31 +648,15 @@ pub(crate) async fn config_remove(
     values: &[String],
     workspace: Option<&str>,
 ) -> Result<()> {
-    let s = Styles::default();
-    let ws_root = resolve_workspace_target(workspace).await?;
-    let meta = read_meta(&ws_root)
-        .await?
-        .context("could not read workspace metadata — is this a valid buona workspace?")?;
-    let mut doc = serde_json::to_value(&meta)?;
     let tokens = path_value::parse_path(key)?;
-    let json_values: Vec<serde_json::Value> = values
-        .iter()
-        .map(|v| serde_json::Value::String(v.clone()))
-        .collect();
-    path_value::remove_from_array(&mut doc, &tokens, &json_values)?;
-    let next: WorkspaceMeta = serde_json::from_value(doc)?;
-    write_meta(&ws_root, &next).await?;
-    let ws_file_path = sync_workspace_file(&ws_root, &next).await?;
-
-    println!("  {} Updated workspace config", s.green.apply_to("✔"));
-    println!(
-        "  {} Synced {}",
-        s.dim.apply_to("→"),
-        ws_file_path.display()
-    );
-    println!();
-
-    Ok(())
+    update_workspace_config(workspace, |doc| {
+        let json_values: Vec<serde_json::Value> = values
+            .iter()
+            .map(|v| serde_json::Value::String(v.clone()))
+            .collect();
+        path_value::remove_from_array(doc, &tokens, &json_values)
+    })
+    .await
 }
 
 /// Adopt an existing local directory into the workspace.
@@ -664,7 +670,8 @@ pub(crate) async fn adopt(
     name_override: Option<&str>,
 ) -> Result<()> {
     let ws_root = resolve_workspace_target(workspace).await?;
-    adopt_into_workspace(&ws_root, path, copy, name_override).await
+    let cfg = config::load_config().await?;
+    adopt_into_workspace(&ws_root, path, copy, name_override, &cfg).await
 }
 
 #[cfg(test)]
@@ -879,11 +886,11 @@ mod tests {
         std::fs::create_dir_all(src.join("beta")).unwrap();
         std::fs::create_dir_all(src.join("gamma")).unwrap();
 
-        // Simulate removing "beta": delete its directory
-        let pkg_dir = src.join("beta");
-        std::fs::remove_dir_all(&pkg_dir).unwrap();
+        remove_packages_from_workspace(dir.path(), &["beta".to_string()], true)
+            .await
+            .unwrap();
 
-        assert!(!pkg_dir.exists());
+        assert!(!src.join("beta").exists());
         let remaining = list_packages(dir.path()).await.unwrap();
         assert_eq!(remaining, vec!["alpha", "gamma"]);
     }
@@ -898,12 +905,30 @@ mod tests {
         std::fs::create_dir_all(src.join("beta")).unwrap();
         std::fs::create_dir_all(src.join("gamma")).unwrap();
 
-        // Remove "alpha" and "gamma"
-        std::fs::remove_dir_all(src.join("alpha")).unwrap();
-        std::fs::remove_dir_all(src.join("gamma")).unwrap();
+        remove_packages_from_workspace(
+            dir.path(),
+            &["alpha".to_string(), "gamma".to_string()],
+            true,
+        )
+        .await
+        .unwrap();
 
         let remaining = list_packages(dir.path()).await.unwrap();
         assert_eq!(remaining, vec!["beta"]);
+    }
+
+    #[tokio::test]
+    async fn remove_unknown_package_errors() {
+        let dir = TempDir::new().unwrap();
+        setup_workspace(dir.path(), "test").await;
+        std::fs::create_dir_all(dir.path().join("src").join("alpha")).unwrap();
+
+        let result = remove_packages_from_workspace(dir.path(), &["nope".to_string()], true).await;
+        assert!(result.is_err());
+
+        // Existing package untouched
+        let remaining = list_packages(dir.path()).await.unwrap();
+        assert_eq!(remaining, vec!["alpha"]);
     }
 
     // ── sync_workspace_file tests ───────────────────────────────────
@@ -976,25 +1001,13 @@ mod tests {
         std::fs::create_dir_all(&source).unwrap();
         std::fs::write(source.join("hello.txt"), "world").unwrap();
 
-        let source_canonical = source.canonicalize().unwrap();
-
-        let src_dir = ws_dir.path().join("src");
-        let dest = src_dir.join("my-pkg");
-        assert!(!dest.exists());
-
-        // Simulate the adopt logic: move source into ws/src/my-pkg
-        if std::fs::rename(&source_canonical, &dest).is_err() {
-            std::process::Command::new("cp")
-                .args(["-a"])
-                .arg(&source_canonical)
-                .arg(&dest)
-                .status()
-                .unwrap();
-            std::fs::remove_dir_all(&source_canonical).unwrap();
-        }
+        let cfg = config::BuonaConfig::default();
+        adopt_into_workspace(ws_dir.path(), &source, false, None, &cfg)
+            .await
+            .unwrap();
 
         // Verify the directory moved
-        assert!(dest.join("hello.txt").exists());
+        let dest = ws_dir.path().join("src").join("my-pkg");
         assert_eq!(
             std::fs::read_to_string(dest.join("hello.txt")).unwrap(),
             "world"
@@ -1016,19 +1029,13 @@ mod tests {
         std::fs::create_dir_all(&source).unwrap();
         std::fs::write(source.join("data.txt"), "keep me").unwrap();
 
-        let dest = ws_dir.path().join("src").join("copy-pkg");
-
-        // Copy instead of move
-        let status = std::process::Command::new("cp")
-            .args(["-a"])
-            .arg(&source)
-            .arg(&dest)
-            .status()
+        let cfg = config::BuonaConfig::default();
+        adopt_into_workspace(ws_dir.path(), &source, true, None, &cfg)
+            .await
             .unwrap();
-        assert!(status.success());
 
         // Verify destination has the file
-        assert!(dest.join("data.txt").exists());
+        let dest = ws_dir.path().join("src").join("copy-pkg");
         assert_eq!(
             std::fs::read_to_string(dest.join("data.txt")).unwrap(),
             "keep me"
@@ -1051,7 +1058,12 @@ mod tests {
         std::fs::create_dir_all(&pkg_dir).unwrap();
         std::fs::write(pkg_dir.join("marker.txt"), "I was here").unwrap();
 
-        // The package is already discoverable — no move/copy needed
+        // Adopting a directory already in place is a no-op registration
+        let cfg = config::BuonaConfig::default();
+        adopt_into_workspace(ws_dir.path(), &pkg_dir, false, None, &cfg)
+            .await
+            .unwrap();
+
         let pkgs = list_packages(ws_dir.path()).await.unwrap();
         assert_eq!(pkgs, vec!["existing-pkg"]);
 
@@ -1070,25 +1082,45 @@ mod tests {
         // Place a directory in src/ with the name "taken"
         std::fs::create_dir_all(ws_dir.path().join("src").join("taken")).unwrap();
 
-        // The package already exists on disk — adopt should detect the conflict
-        let pkgs = list_packages(ws_dir.path()).await.unwrap();
-        assert!(pkgs.contains(&"taken".to_string()));
+        // Adopting an outside directory with the same name should conflict
+        let outside = TempDir::new().unwrap();
+        let source = outside.path().join("taken");
+        std::fs::create_dir_all(&source).unwrap();
+
+        let cfg = config::BuonaConfig::default();
+        let result = adopt_into_workspace(ws_dir.path(), &source, false, None, &cfg).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("destination already exists")
+        );
     }
 
-    #[test]
-    fn adopt_errors_on_nonexistent_path() {
-        let dir = TempDir::new().unwrap();
-        let bogus = dir.path().join("does-not-exist");
-        assert!(!bogus.exists());
+    #[tokio::test]
+    async fn adopt_errors_on_nonexistent_path() {
+        let ws_dir = TempDir::new().unwrap();
+        setup_workspace(ws_dir.path(), "test-ws").await;
+
+        let bogus = ws_dir.path().join("does-not-exist");
+        let cfg = config::BuonaConfig::default();
+        let result = adopt_into_workspace(ws_dir.path(), &bogus, false, None, &cfg).await;
+        assert!(result.is_err());
     }
 
-    #[test]
-    fn adopt_errors_on_file_path() {
-        let dir = TempDir::new().unwrap();
-        let file = dir.path().join("not-a-dir.txt");
+    #[tokio::test]
+    async fn adopt_errors_on_file_path() {
+        let ws_dir = TempDir::new().unwrap();
+        setup_workspace(ws_dir.path(), "test-ws").await;
+
+        let file = ws_dir.path().join("not-a-dir.txt");
         std::fs::write(&file, "hello").unwrap();
-        assert!(file.exists());
-        assert!(!file.is_dir(), "files should be rejected by adopt");
+
+        let cfg = config::BuonaConfig::default();
+        let result = adopt_into_workspace(ws_dir.path(), &file, false, None, &cfg).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a directory"));
     }
 
     // ── add_packages_to_workspace tests ──────────────────────────────
@@ -1133,7 +1165,8 @@ mod tests {
 
         // Clone using full file:// URL
         let url = format!("file://{}", remote_repo.canonicalize().unwrap().display());
-        let result = add_packages_to_workspace(ws_dir.path(), &[url]).await;
+        let cfg = config::BuonaConfig::default();
+        let result = add_packages_to_workspace(ws_dir.path(), &[url], &cfg).await;
 
         // The clone should succeed
         assert!(result.is_ok());
@@ -1169,7 +1202,8 @@ mod tests {
             .unwrap();
 
         let url = format!("file://{}", remote_repo.canonicalize().unwrap().display());
-        let result = add_packages_to_workspace(ws_dir.path(), &[url]).await;
+        let cfg = config::BuonaConfig::default();
+        let result = add_packages_to_workspace(ws_dir.path(), &[url], &cfg).await;
 
         // Should return an error when all packages fail
         assert!(result.is_err());
@@ -1226,7 +1260,7 @@ mod tests {
             mount_root: None,
         };
         let cfg = config::BuonaConfig::default(); // default tracking = Package
-        assert_eq!(resolve_git_tracking(&meta, &cfg), GitTracking::Workspace);
+        assert_eq!(meta.effective_tracking(&cfg), GitTracking::Workspace);
     }
 
     #[test]
@@ -1238,7 +1272,7 @@ mod tests {
         };
         let mut cfg = config::BuonaConfig::default();
         cfg.git.tracking = GitTracking::Workspace;
-        assert_eq!(resolve_git_tracking(&meta, &cfg), GitTracking::Workspace);
+        assert_eq!(meta.effective_tracking(&cfg), GitTracking::Workspace);
     }
 
     #[test]
@@ -1249,7 +1283,7 @@ mod tests {
             mount_root: None,
         };
         let cfg = config::BuonaConfig::default();
-        assert_eq!(resolve_git_tracking(&meta, &cfg), GitTracking::Package);
+        assert_eq!(meta.effective_tracking(&cfg), GitTracking::Package);
     }
 
     // ── rename tests ────────────────────────────────────────────────
@@ -1446,6 +1480,31 @@ mod tests {
         assert!(
             !ws_path.join("CLAUDE.md").exists(),
             "CLAUDE.md should not exist when no_template is true"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_warns_but_succeeds_when_template_missing() {
+        let parent = TempDir::new().unwrap();
+        let ws_path = parent.path().join("missing-tmpl-ws");
+        let missing = parent.path().join("does-not-exist");
+
+        create(
+            &ws_path,
+            CreateOptions {
+                no_defaults: true,
+                template_override: Some(missing.to_str().unwrap()),
+                no_template: false,
+                no_install: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            ws_path.join("buona.workspace.json").exists(),
+            "workspace should still be created when template is missing"
         );
     }
 }

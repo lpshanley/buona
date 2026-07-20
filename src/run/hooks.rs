@@ -249,7 +249,7 @@ fn resolve_hook_value(
         }
         HookValue::Script(script) => {
             // Try parsing as a build system
-            if let Ok(system) = parse_as_build_system(script) {
+            if let Ok(system) = script.parse::<BuildSystem>() {
                 let command = strip_hook_prefix(hook_name);
 
                 // Try standard mapping first
@@ -308,12 +308,6 @@ fn strip_hook_prefix(hook_name: &str) -> String {
     }
 }
 
-/// Try to parse a string as a [`BuildSystem`].
-fn parse_as_build_system(name: &str) -> Result<BuildSystem, ()> {
-    serde_json::from_value::<BuildSystem>(serde_json::Value::String(name.to_string()))
-        .map_err(|_| ())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,22 +333,22 @@ mod tests {
         assert_eq!(strip_hook_prefix("build"), "build");
     }
 
-    // ── parse_as_build_system ───────────────────────────────────────
+    // ── build-system name parsing (via FromStr) ─────────────────────
 
     #[test]
     fn parse_known_systems() {
-        assert!(parse_as_build_system("cargo").is_ok());
-        assert!(parse_as_build_system("npm").is_ok());
-        assert!(parse_as_build_system("go").is_ok());
-        assert!(parse_as_build_system("make").is_ok());
-        assert!(parse_as_build_system("just").is_ok());
+        assert!("cargo".parse::<BuildSystem>().is_ok());
+        assert!("npm".parse::<BuildSystem>().is_ok());
+        assert!("go".parse::<BuildSystem>().is_ok());
+        assert!("make".parse::<BuildSystem>().is_ok());
+        assert!("just".parse::<BuildSystem>().is_ok());
     }
 
     #[test]
     fn parse_unknown_system() {
-        assert!(parse_as_build_system("docker compose up").is_err());
-        assert!(parse_as_build_system("./scripts/gen.sh").is_err());
-        assert!(parse_as_build_system("foobar").is_err());
+        assert!("docker compose up".parse::<BuildSystem>().is_err());
+        assert!("./scripts/gen.sh".parse::<BuildSystem>().is_err());
+        assert!("foobar".parse::<BuildSystem>().is_err());
     }
 
     // ── resolve_hook_value ──────────────────────────────────────────

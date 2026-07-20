@@ -78,6 +78,28 @@ impl fmt::Display for BuildSystem {
     }
 }
 
+impl std::str::FromStr for BuildSystem {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "cargo" => Self::Cargo,
+            "go" => Self::Go,
+            "npm" => Self::Npm,
+            "pnpm" => Self::Pnpm,
+            "yarn" => Self::Yarn,
+            "bun" => Self::Bun,
+            "uv" => Self::Uv,
+            "poetry" => Self::Poetry,
+            "make" => Self::Make,
+            "just" => Self::Just,
+            "gradle" => Self::Gradle,
+            "maven" => Self::Maven,
+            other => return Err(format!("unknown build system \"{other}\"")),
+        })
+    }
+}
+
 /// Standard commands that buona recognizes and maps to system-specific invocations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum StandardCommand {
@@ -172,7 +194,6 @@ pub(crate) enum HookSource {
 
 /// A fully resolved hook, ready to execute.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct ResolvedHook {
     /// Pre or post.
     pub(crate) phase: HookPhase,
@@ -228,6 +249,15 @@ mod tests {
             let deserialized: BuildSystem = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized, system);
         }
+    }
+
+    #[test]
+    fn build_system_from_str_round_trips_display() {
+        for &system in BuildSystem::ALL {
+            let parsed: BuildSystem = system.to_string().parse().unwrap();
+            assert_eq!(parsed, system);
+        }
+        assert!("docker compose up".parse::<BuildSystem>().is_err());
     }
 
     #[test]

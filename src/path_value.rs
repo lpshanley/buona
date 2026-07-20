@@ -1,6 +1,7 @@
 //! Shared helpers for dotted/bracket config path operations.
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,22 +15,25 @@ pub(crate) fn parse_path(path: &str) -> Result<Vec<PathToken>> {
         bail!("path cannot be empty");
     }
 
-    let chars: Vec<char> = path.chars().collect();
+    // Structural characters ('.', '[', ']', digits) are all ASCII, so we can
+    // scan bytes and slice at those positions — multi-byte UTF-8 sequences
+    // never contain ASCII bytes, so every slice lands on a char boundary.
+    let bytes = path.as_bytes();
     let mut i = 0usize;
     let mut tokens = Vec::new();
 
-    while i < chars.len() {
-        if chars[i] == '.' {
+    while i < bytes.len() {
+        if bytes[i] == b'.' {
             bail!("invalid path: unexpected '.'");
         }
 
-        if chars[i] == '[' {
+        if bytes[i] == b'[' {
             i += 1;
             let start = i;
-            while i < chars.len() && chars[i].is_ascii_digit() {
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
                 i += 1;
             }
-            if i == start || i >= chars.len() || chars[i] != ']' {
+            if i == start || i >= bytes.len() || bytes[i] != b']' {
                 bail!("invalid path: malformed array index");
             }
             let idx: usize = path[start..i].parse()?;
@@ -37,7 +41,7 @@ pub(crate) fn parse_path(path: &str) -> Result<Vec<PathToken>> {
             i += 1;
         } else {
             let start = i;
-            while i < chars.len() && chars[i] != '.' && chars[i] != '[' {
+            while i < bytes.len() && bytes[i] != b'.' && bytes[i] != b'[' {
                 i += 1;
             }
             let key = &path[start..i];
@@ -47,13 +51,13 @@ pub(crate) fn parse_path(path: &str) -> Result<Vec<PathToken>> {
             tokens.push(PathToken::Key(key.to_string()));
         }
 
-        if i < chars.len() {
-            if chars[i] == '.' {
+        if i < bytes.len() {
+            if bytes[i] == b'.' {
                 i += 1;
-                if i >= chars.len() {
+                if i >= bytes.len() {
                     bail!("invalid path: trailing '.'");
                 }
-            } else if chars[i] != '[' {
+            } else if bytes[i] != b'[' {
                 bail!("invalid path");
             }
         }
@@ -62,29 +66,48 @@ pub(crate) fn parse_path(path: &str) -> Result<Vec<PathToken>> {
     Ok(tokens)
 }
 
-pub(crate) fn get_path<'a>(root: &'a Value, tokens: &[PathToken]) -> Result<&'a Value> {
+/// Walk `tokens` from `root` and return a shared reference to the target.
+fn walk<'a>(root: &'a Value, tokens: &[PathToken]) -> Result<&'a Value> {
     let mut cur = root;
     for token in tokens {
-        match token {
-            PathToken::Key(key) => {
-                let map = cur
-                    .as_object()
-                    .ok_or_else(|| anyhow::anyhow!("expected object while resolving '{key}'"))?;
-                cur = map
-                    .get(key)
-                    .ok_or_else(|| anyhow::anyhow!("path not found: missing key '{key}'"))?;
-            }
-            PathToken::Index(idx) => {
-                let arr = cur
-                    .as_array()
-                    .ok_or_else(|| anyhow::anyhow!("expected array while resolving index"))?;
-                cur = arr
-                    .get(*idx)
-                    .ok_or_else(|| anyhow::anyhow!("path not found: index {idx} out of bounds"))?;
-            }
-        }
+        cur = match token {
+            PathToken::Key(key) => cur
+                .as_object()
+                .ok_or_else(|| anyhow!("expected object while resolving '{key}'"))?
+                .get(key)
+                .ok_or_else(|| anyhow!("path not found: missing key '{key}'"))?,
+            PathToken::Index(idx) => cur
+                .as_array()
+                .ok_or_else(|| anyhow!("expected array while resolving index"))?
+                .get(*idx)
+                .ok_or_else(|| anyhow!("path not found: index {idx} out of bounds"))?,
+        };
     }
     Ok(cur)
+}
+
+/// Walk `tokens` from `root` and return a mutable reference to the target.
+fn walk_mut<'a>(root: &'a mut Value, tokens: &[PathToken]) -> Result<&'a mut Value> {
+    let mut cur = root;
+    for token in tokens {
+        cur = match token {
+            PathToken::Key(key) => cur
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("expected object while resolving '{key}'"))?
+                .get_mut(key)
+                .ok_or_else(|| anyhow!("path not found: missing key '{key}'"))?,
+            PathToken::Index(idx) => cur
+                .as_array_mut()
+                .ok_or_else(|| anyhow!("expected array while resolving index"))?
+                .get_mut(*idx)
+                .ok_or_else(|| anyhow!("path not found: index {idx} out of bounds"))?,
+        };
+    }
+    Ok(cur)
+}
+
+pub(crate) fn get_path<'a>(root: &'a Value, tokens: &[PathToken]) -> Result<&'a Value> {
+    walk(root, tokens)
 }
 
 pub(crate) fn set_path(root: &mut Value, tokens: &[PathToken], value: Value) -> Result<()> {
@@ -94,40 +117,19 @@ pub(crate) fn set_path(root: &mut Value, tokens: &[PathToken], value: Value) -> 
     }
 
     let (parents, leaf) = tokens.split_at(tokens.len() - 1);
-    let mut cur = root;
-
-    for token in parents {
-        match token {
-            PathToken::Key(key) => {
-                let map = cur
-                    .as_object_mut()
-                    .ok_or_else(|| anyhow::anyhow!("expected object while resolving '{key}'"))?;
-                cur = map
-                    .get_mut(key)
-                    .ok_or_else(|| anyhow::anyhow!("path not found: missing key '{key}'"))?;
-            }
-            PathToken::Index(idx) => {
-                let arr = cur
-                    .as_array_mut()
-                    .ok_or_else(|| anyhow::anyhow!("expected array while resolving index"))?;
-                cur = arr
-                    .get_mut(*idx)
-                    .ok_or_else(|| anyhow::anyhow!("path not found: index {idx} out of bounds"))?;
-            }
-        }
-    }
+    let parent = walk_mut(root, parents)?;
 
     match &leaf[0] {
         PathToken::Key(key) => {
-            let map = cur
+            parent
                 .as_object_mut()
-                .ok_or_else(|| anyhow::anyhow!("expected object at final path segment"))?;
-            map.insert(key.clone(), value);
+                .ok_or_else(|| anyhow!("expected object at final path segment"))?
+                .insert(key.clone(), value);
         }
         PathToken::Index(idx) => {
-            let arr = cur
+            let arr = parent
                 .as_array_mut()
-                .ok_or_else(|| anyhow::anyhow!("expected array at final path segment"))?;
+                .ok_or_else(|| anyhow!("expected array at final path segment"))?;
             if *idx >= arr.len() {
                 bail!("index {idx} out of bounds");
             }
@@ -144,42 +146,21 @@ pub(crate) fn unset_path(root: &mut Value, tokens: &[PathToken]) -> Result<()> {
     }
 
     let (parents, leaf) = tokens.split_at(tokens.len() - 1);
-    let mut cur = root;
-
-    for token in parents {
-        match token {
-            PathToken::Key(key) => {
-                let map = cur
-                    .as_object_mut()
-                    .ok_or_else(|| anyhow::anyhow!("expected object while resolving '{key}'"))?;
-                cur = map
-                    .get_mut(key)
-                    .ok_or_else(|| anyhow::anyhow!("path not found: missing key '{key}'"))?;
-            }
-            PathToken::Index(idx) => {
-                let arr = cur
-                    .as_array_mut()
-                    .ok_or_else(|| anyhow::anyhow!("expected array while resolving index"))?;
-                cur = arr
-                    .get_mut(*idx)
-                    .ok_or_else(|| anyhow::anyhow!("path not found: index {idx} out of bounds"))?;
-            }
-        }
-    }
+    let parent = walk_mut(root, parents)?;
 
     match &leaf[0] {
         PathToken::Key(key) => {
-            let map = cur
+            let map = parent
                 .as_object_mut()
-                .ok_or_else(|| anyhow::anyhow!("expected object at final path segment"))?;
+                .ok_or_else(|| anyhow!("expected object at final path segment"))?;
             if map.remove(key).is_none() {
                 bail!("path not found: missing key '{key}'");
             }
         }
         PathToken::Index(idx) => {
-            let arr = cur
+            let arr = parent
                 .as_array_mut()
-                .ok_or_else(|| anyhow::anyhow!("expected array at final path segment"))?;
+                .ok_or_else(|| anyhow!("expected array at final path segment"))?;
             if *idx >= arr.len() {
                 bail!("index {idx} out of bounds");
             }
@@ -197,7 +178,6 @@ pub(crate) fn append_to_array(
     tokens: &[PathToken],
     values: Vec<Value>,
 ) -> Result<()> {
-    // Resolve the parent so we can create or access the target array.
     let arr = resolve_or_create_array(root, tokens)?;
     for v in values {
         if !arr.contains(&v) {
@@ -214,38 +194,11 @@ pub(crate) fn remove_from_array(
     tokens: &[PathToken],
     values: &[Value],
 ) -> Result<()> {
-    let target = resolve_path_mut(root, tokens)?;
-    let arr = target
+    let arr = walk_mut(root, tokens)?
         .as_array_mut()
-        .ok_or_else(|| anyhow::anyhow!("expected an array at the target path"))?;
+        .ok_or_else(|| anyhow!("expected an array at the target path"))?;
     arr.retain(|item| !values.contains(item));
     Ok(())
-}
-
-/// Walk to the target described by `tokens` and return a mutable reference.
-fn resolve_path_mut<'a>(root: &'a mut Value, tokens: &[PathToken]) -> Result<&'a mut Value> {
-    let mut cur = root;
-    for token in tokens {
-        match token {
-            PathToken::Key(key) => {
-                let map = cur
-                    .as_object_mut()
-                    .ok_or_else(|| anyhow::anyhow!("expected object while resolving '{key}'"))?;
-                cur = map
-                    .get_mut(key)
-                    .ok_or_else(|| anyhow::anyhow!("path not found: missing key '{key}'"))?;
-            }
-            PathToken::Index(idx) => {
-                let arr = cur
-                    .as_array_mut()
-                    .ok_or_else(|| anyhow::anyhow!("expected array while resolving index"))?;
-                cur = arr
-                    .get_mut(*idx)
-                    .ok_or_else(|| anyhow::anyhow!("path not found: index {idx} out of bounds"))?;
-            }
-        }
-    }
-    Ok(cur)
 }
 
 /// Resolve a path to a mutable array reference, creating an empty array if
@@ -257,59 +210,31 @@ fn resolve_or_create_array<'a>(
     if tokens.is_empty() {
         return root
             .as_array_mut()
-            .ok_or_else(|| anyhow::anyhow!("expected an array at root"));
+            .ok_or_else(|| anyhow!("expected an array at root"));
     }
 
     let (parents, leaf) = tokens.split_at(tokens.len() - 1);
-    let mut cur = root;
-
-    for token in parents {
-        match token {
-            PathToken::Key(key) => {
-                let map = cur
-                    .as_object_mut()
-                    .ok_or_else(|| anyhow::anyhow!("expected object while resolving '{key}'"))?;
-                cur = map
-                    .get_mut(key)
-                    .ok_or_else(|| anyhow::anyhow!("path not found: missing key '{key}'"))?;
-            }
-            PathToken::Index(idx) => {
-                let arr = cur
-                    .as_array_mut()
-                    .ok_or_else(|| anyhow::anyhow!("expected array while resolving index"))?;
-                cur = arr
-                    .get_mut(*idx)
-                    .ok_or_else(|| anyhow::anyhow!("path not found: index {idx} out of bounds"))?;
-            }
-        }
-    }
+    let parent = walk_mut(root, parents)?;
 
     match &leaf[0] {
         PathToken::Key(key) => {
-            let map = cur
+            let target = parent
                 .as_object_mut()
-                .ok_or_else(|| anyhow::anyhow!("expected object at final path segment"))?;
-            // Create an empty array if the key doesn't exist yet.
-            if !map.contains_key(key) {
-                map.insert(key.clone(), Value::Array(Vec::new()));
-            }
-            let target = map.get_mut(key).unwrap();
+                .ok_or_else(|| anyhow!("expected object at final path segment"))?
+                .entry(key.clone())
+                .or_insert_with(|| Value::Array(Vec::new()));
             let type_name = target_type_name(target);
             target
                 .as_array_mut()
-                .ok_or_else(|| anyhow::anyhow!("expected an array at '{key}', found {type_name}"))
+                .ok_or_else(|| anyhow!("expected an array at '{key}', found {type_name}"))
         }
-        PathToken::Index(idx) => {
-            let arr = cur
-                .as_array_mut()
-                .ok_or_else(|| anyhow::anyhow!("expected array at final path segment"))?;
-            let target = arr
-                .get_mut(*idx)
-                .ok_or_else(|| anyhow::anyhow!("index {idx} out of bounds"))?;
-            target
-                .as_array_mut()
-                .ok_or_else(|| anyhow::anyhow!("expected an array at index {idx}"))
-        }
+        PathToken::Index(idx) => parent
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("expected array at final path segment"))?
+            .get_mut(*idx)
+            .ok_or_else(|| anyhow!("index {idx} out of bounds"))?
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("expected an array at index {idx}")),
     }
 }
 
@@ -322,6 +247,26 @@ fn target_type_name(v: &Value) -> &'static str {
         Value::Array(_) => "array",
         Value::Object(_) => "object",
     }
+}
+
+/// Deserialize a JSON document into `T`, failing if the document contains any
+/// key that `T` does not know about.
+///
+/// Config structs deliberately ignore unknown keys when *loading* files (so
+/// legacy keys are dropped gracefully), but a `set`/`add` command writing an
+/// unknown key would otherwise be silently discarded on save — a typo like
+/// `buona config set workspce_dir ...` must be an error, not a no-op.
+pub(crate) fn from_value_strict<T: DeserializeOwned>(value: Value) -> Result<T> {
+    let mut unknown: Vec<String> = Vec::new();
+    let result = serde_ignored::deserialize(value, |path| unknown.push(path.to_string()))?;
+    if !unknown.is_empty() {
+        bail!(
+            "unknown configuration key{}: {}",
+            if unknown.len() == 1 { "" } else { "s" },
+            unknown.join(", ")
+        );
+    }
+    Ok(result)
 }
 
 pub(crate) fn parse_set_value(
@@ -404,6 +349,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_path_handles_non_ascii_keys() {
+        // Regression: char indices were used as byte offsets, panicking on
+        // multi-byte UTF-8 keys.
+        let tokens = parse_path("héllo.wörld").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                PathToken::Key("héllo".to_string()),
+                PathToken::Key("wörld".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_path_non_ascii_key_with_index() {
+        let tokens = parse_path("héllo[3]").unwrap();
+        assert_eq!(
+            tokens,
+            vec![PathToken::Key("héllo".to_string()), PathToken::Index(3)]
+        );
+    }
+
+    #[test]
     fn append_to_array_creates_and_deduplicates() {
         let mut root = serde_json::json!({"items": ["a"]});
         let tokens = parse_path("items").unwrap();
@@ -443,5 +411,28 @@ mod tests {
         let tokens = parse_path("items").unwrap();
         remove_from_array(&mut root, &tokens, &[Value::String("z".into())]).unwrap();
         assert_eq!(root["items"], serde_json::json!(["a"]));
+    }
+
+    #[test]
+    fn from_value_strict_accepts_known_fields() {
+        #[derive(serde::Deserialize)]
+        struct Demo {
+            #[allow(dead_code)]
+            name: String,
+        }
+        let value = serde_json::json!({"name": "ok"});
+        assert!(from_value_strict::<Demo>(value).is_ok());
+    }
+
+    #[test]
+    fn from_value_strict_rejects_unknown_fields() {
+        #[derive(Debug, serde::Deserialize)]
+        struct Demo {
+            #[allow(dead_code)]
+            name: String,
+        }
+        let value = serde_json::json!({"name": "ok", "nmae": "typo"});
+        let err = from_value_strict::<Demo>(value).unwrap_err();
+        assert!(err.to_string().contains("nmae"));
     }
 }

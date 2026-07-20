@@ -53,9 +53,9 @@ impl<'de> Deserialize<'de> for ConfigSystem {
             return Ok(Self::Auto);
         }
 
-        serde_json::from_value::<BuildSystem>(serde_json::Value::String(raw.clone()))
+        raw.parse::<BuildSystem>()
             .map(Self::Fixed)
-            .map_err(|_| DeError::custom(format!("unknown build system \"{raw}\"")))
+            .map_err(DeError::custom)
     }
 }
 

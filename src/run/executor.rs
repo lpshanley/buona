@@ -1,6 +1,5 @@
 //! Command execution helpers for `buona run`.
 
-use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -21,32 +20,22 @@ use super::planner::{TargetRunPlan, resolve_target_run_plan};
 use super::targets::{ExecutionTarget, list_workspace_package_targets};
 use super::types::{ExecutionPlan, FailPolicy, ResolvedHook};
 
-#[derive(Clone)]
-struct OutputSink;
-
-impl OutputSink {
-    fn plain() -> Self {
-        Self
-    }
-
-    fn task_queued(&self, _task: &str) {}
-
-    fn task_started(&self, _task: &str) {}
-
-    fn task_finished(&self, _task: &str, _success: bool) {}
-
-    fn line(&self, _task: &str, line: String, is_stderr: bool) {
-        if is_stderr {
-            eprintln!("{line}");
-        } else {
-            println!("{line}");
-        }
-    }
+/// How child process output reaches the terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputMode {
+    /// Child inherits our stdio directly — full TTY behavior (colors,
+    /// progress bars, interactive prompts). Used when exactly one target
+    /// runs serially, so nothing can interleave.
+    Inherit,
+    /// Child output is captured and re-printed line-by-line with a
+    /// `[target:…/stage]` prefix. Used whenever output from multiple
+    /// targets or stages could interleave.
+    Streamed,
 }
 
 pub(super) async fn execute_recursive(
     options: &RunOptions,
-    ws_root: &Path,
+    ws_root: &std::path::Path,
     exec: EffectiveExecution,
 ) -> Result<()> {
     let s = Styles::default();
@@ -114,56 +103,44 @@ pub(super) async fn execute_recursive(
         return Ok(());
     }
 
-    let sink = OutputSink::plain();
-
-    let result = async {
-        let root_task = "root";
-        sink.task_queued(root_task);
-        sink.task_started(root_task);
-
-        if let Some(pre) = ws_plan.hooks.pre_hook.as_ref() {
-            execute_hook(pre, root_task, &sink).await?;
-        }
-        execute_plan(&ws_plan.plan, root_task, &sink).await?;
-
-        execute_package_stage(pkg_plans, exec, sink.clone()).await?;
-
-        if let Some(post) = ws_plan.hooks.post_hook.as_ref() {
-            execute_hook(post, root_task, &sink).await?;
-        }
-        sink.task_finished(root_task, true);
-
-        Ok(())
+    let root_label = "root";
+    if let Some(pre) = ws_plan.hooks.pre_hook.as_ref() {
+        execute_hook(pre, root_label, OutputMode::Streamed).await?;
     }
-    .await;
+    execute_plan(&ws_plan.plan, root_label, OutputMode::Streamed).await?;
 
-    if result.is_err() {
-        sink.task_finished("root", false);
+    execute_package_stage(pkg_plans, exec, OutputMode::Streamed).await?;
+
+    if let Some(post) = ws_plan.hooks.post_hook.as_ref() {
+        execute_hook(post, root_label, OutputMode::Streamed).await?;
     }
 
-    result
+    Ok(())
 }
 
 pub(super) async fn execute_target_plans(
     target_plans: Vec<TargetRunPlan>,
     exec: EffectiveExecution,
 ) -> Result<()> {
-    execute_package_stage(target_plans, exec, OutputSink::plain()).await
+    // A single serial target gets the terminal to itself, so the child can
+    // run with full TTY behavior instead of prefixed line streaming.
+    let mode = if !exec.parallel && target_plans.len() == 1 {
+        OutputMode::Inherit
+    } else {
+        OutputMode::Streamed
+    };
+    execute_package_stage(target_plans, exec, mode).await
 }
 
 async fn execute_package_stage(
     pkg_plans: Vec<TargetRunPlan>,
     exec: EffectiveExecution,
-    sink: OutputSink,
+    mode: OutputMode,
 ) -> Result<()> {
     if !exec.parallel || exec.jobs <= 1 || pkg_plans.len() <= 1 {
         for pkg in pkg_plans {
             let label = pkg.target.label();
-            sink.task_queued(&label);
-            sink.task_started(&label);
-            let result = execute_with_hooks_inner(&pkg.plan, &pkg.hooks, &label, &sink).await;
-            sink.task_finished(&label, result.is_ok());
-            result?;
+            execute_with_hooks(&pkg.plan, &pkg.hooks, &label, mode).await?;
         }
         return Ok(());
     }
@@ -173,56 +150,45 @@ async fn execute_package_stage(
 
     for pkg in pkg_plans {
         let label = pkg.target.label();
-        sink.task_queued(&label);
-
         let sem = semaphore.clone();
-        let sink_clone = sink.clone();
         set.spawn(async move {
             let _permit = sem
                 .acquire_owned()
                 .await
                 .map_err(|_| RunError::ConfigError("parallel scheduler closed".to_string()))?;
-            sink_clone.task_started(&label);
-
-            let result = execute_with_hooks_inner(&pkg.plan, &pkg.hooks, &label, &sink_clone).await;
-            sink_clone.task_finished(&label, result.is_ok());
-            Ok::<(String, Result<()>), RunError>((label, result))
+            let result =
+                execute_with_hooks(&pkg.plan, &pkg.hooks, &label, OutputMode::Streamed).await;
+            Ok::<Result<()>, RunError>(result)
         });
     }
 
     let mut first_error: Option<anyhow::Error> = None;
+    let mut record_error = |err: anyhow::Error| {
+        if first_error.is_none() {
+            first_error = Some(err);
+        }
+    };
 
     while let Some(joined) = set.join_next().await {
-        match joined {
-            Ok(Ok((_label, run_result))) => {
-                if let Err(err) = run_result {
-                    if first_error.is_none() {
-                        first_error = Some(err);
-                    }
-                    if exec.fail_policy == FailPolicy::FailFast {
-                        set.abort_all();
-                        break;
-                    }
-                }
+        let failed = match joined {
+            Ok(Ok(Ok(()))) => false,
+            Ok(Ok(Err(err))) => {
+                record_error(err);
+                true
             }
             Ok(Err(err)) => {
-                if first_error.is_none() {
-                    first_error = Some(err.into());
-                }
-                if exec.fail_policy == FailPolicy::FailFast {
-                    set.abort_all();
-                    break;
-                }
+                record_error(err.into());
+                true
             }
             Err(join_err) => {
-                if first_error.is_none() {
-                    first_error = Some(anyhow::anyhow!("parallel task join error: {join_err}"));
-                }
-                if exec.fail_policy == FailPolicy::FailFast {
-                    set.abort_all();
-                    break;
-                }
+                record_error(anyhow::anyhow!("parallel task join error: {join_err}"));
+                true
             }
+        };
+
+        if failed && exec.fail_policy == FailPolicy::FailFast {
+            set.abort_all();
+            break;
         }
     }
 
@@ -235,85 +201,42 @@ async fn execute_package_stage(
     Ok(())
 }
 
-async fn execute_with_hooks_inner(
+async fn execute_with_hooks(
     plan: &ExecutionPlan,
     hooks: &HookResolution,
     target_label: &str,
-    sink: &OutputSink,
+    mode: OutputMode,
 ) -> Result<()> {
     if let Some(pre_hook) = hooks.pre_hook.as_ref() {
-        execute_hook(pre_hook, target_label, sink).await?;
+        execute_hook(pre_hook, target_label, mode).await?;
     }
 
-    execute_plan(plan, target_label, sink).await?;
+    execute_plan(plan, target_label, mode).await?;
 
     if let Some(post_hook) = hooks.post_hook.as_ref() {
-        execute_hook(post_hook, target_label, sink).await?;
+        execute_hook(post_hook, target_label, mode).await?;
     }
 
     Ok(())
 }
 
-async fn execute_plan(plan: &ExecutionPlan, target_label: &str, sink: &OutputSink) -> Result<()> {
+async fn execute_plan(plan: &ExecutionPlan, target_label: &str, mode: OutputMode) -> Result<()> {
     let Some(program) = plan.program.as_ref() else {
         return Ok(());
     };
 
     let mut command = Command::new(program);
-    command
-        .args(&plan.args)
-        .current_dir(&plan.cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    apply_color_envs(&mut command);
-    let mut child = command.spawn().with_context(|| {
-        format!(
-            "failed to execute {} — is it installed and on your PATH?",
-            program
-        )
-    })?;
+    command.args(&plan.args).current_dir(&plan.cwd);
 
-    let prefix = stage_prefix(target_label, "cmd");
-    let task_key = target_label.to_string();
-    let sink_stdout = sink.clone();
-    let sink_stderr = sink.clone();
-    let stdout_task = child.stdout.take().map(|stdout| {
-        tokio::spawn(stream_output(
-            stdout,
-            prefix.clone(),
-            task_key.clone(),
-            sink_stdout,
-            false,
-        ))
-    });
-    let stderr_task = child.stderr.take().map(|stderr| {
-        tokio::spawn(stream_output(
-            stderr,
-            prefix.clone(),
-            task_key.clone(),
-            sink_stderr,
-            true,
-        ))
-    });
-
-    let status = child.wait().await.with_context(|| {
-        format!(
-            "failed while waiting for {} to exit in {}",
-            program,
-            plan.cwd.display()
-        )
-    })?;
-
-    if let Some(task) = stdout_task {
-        task.await
-            .context("stdout stream task panicked")?
-            .context("failed to stream command stdout")?;
-    }
-    if let Some(task) = stderr_task {
-        task.await
-            .context("stderr stream task panicked")?
-            .context("failed to stream command stderr")?;
-    }
+    let status = run_child(&mut command, target_label, "cmd", mode)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to execute {} in {} — is it installed and on your PATH?",
+                program,
+                plan.cwd.display()
+            )
+        })?;
 
     if !status.success() {
         return Err(RunError::CommandFailed {
@@ -326,7 +249,7 @@ async fn execute_plan(plan: &ExecutionPlan, target_label: &str, sink: &OutputSin
     Ok(())
 }
 
-async fn execute_hook(hook: &ResolvedHook, target_label: &str, sink: &OutputSink) -> Result<()> {
+async fn execute_hook(hook: &ResolvedHook, target_label: &str, mode: OutputMode) -> Result<()> {
     let s = Styles::default();
     println!(
         "  {} {}",
@@ -336,60 +259,17 @@ async fn execute_hook(hook: &ResolvedHook, target_label: &str, sink: &OutputSink
     println!();
 
     let mut command = Command::new(&hook.program);
-    command
-        .args(&hook.args)
-        .current_dir(&hook.cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    apply_color_envs(&mut command);
-    let mut child = command.spawn().with_context(|| {
-        format!(
-            "failed to execute hook \"{}\" ({}) — is it installed and on your PATH?",
-            hook.name, hook.program
-        )
-    })?;
+    command.args(&hook.args).current_dir(&hook.cwd);
 
     let stage = hook.phase.to_string();
-    let prefix = stage_prefix(target_label, &stage);
-    let task_key = target_label.to_string();
-    let sink_stdout = sink.clone();
-    let sink_stderr = sink.clone();
-    let stdout_task = child.stdout.take().map(|stdout| {
-        tokio::spawn(stream_output(
-            stdout,
-            prefix.clone(),
-            task_key.clone(),
-            sink_stdout,
-            false,
-        ))
-    });
-    let stderr_task = child.stderr.take().map(|stderr| {
-        tokio::spawn(stream_output(
-            stderr,
-            prefix.clone(),
-            task_key.clone(),
-            sink_stderr,
-            true,
-        ))
-    });
-
-    let status = child.wait().await.with_context(|| {
-        format!(
-            "failed while waiting for hook \"{}\" ({}) to exit",
-            hook.name, hook.program
-        )
-    })?;
-
-    if let Some(task) = stdout_task {
-        task.await
-            .context("hook stdout stream task panicked")?
-            .context("failed to stream hook stdout")?;
-    }
-    if let Some(task) = stderr_task {
-        task.await
-            .context("hook stderr stream task panicked")?
-            .context("failed to stream hook stderr")?;
-    }
+    let status = run_child(&mut command, target_label, &stage, mode)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to execute hook \"{}\" ({}) — is it installed and on your PATH?",
+                hook.name, hook.program
+            )
+        })?;
 
     if !status.success() {
         return Err(RunError::HookFailed {
@@ -402,27 +282,69 @@ async fn execute_hook(hook: &ResolvedHook, target_label: &str, sink: &OutputSink
     Ok(())
 }
 
-fn stage_prefix(target_label: &str, stage: &str) -> String {
-    format!("[target:{target_label}/{stage}]")
+/// Spawn a child process and wait for it, delivering output per `mode`.
+///
+/// `kill_on_drop` ensures that when a fail-fast abort drops the future, the
+/// child process is killed instead of lingering as an orphan.
+async fn run_child(
+    command: &mut Command,
+    target_label: &str,
+    stage: &str,
+    mode: OutputMode,
+) -> Result<std::process::ExitStatus> {
+    command.kill_on_drop(true);
+
+    if mode == OutputMode::Inherit {
+        let mut child = command.spawn()?;
+        return Ok(child.wait().await?);
+    }
+
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    apply_color_envs(command);
+    let mut child = command.spawn()?;
+
+    let prefix = format!("[target:{target_label}/{stage}]");
+    let stdout_task = child
+        .stdout
+        .take()
+        .map(|stdout| tokio::spawn(stream_output(stdout, prefix.clone(), false)));
+    let stderr_task = child
+        .stderr
+        .take()
+        .map(|stderr| tokio::spawn(stream_output(stderr, prefix.clone(), true)));
+
+    let status = child.wait().await?;
+
+    if let Some(task) = stdout_task {
+        task.await
+            .context("stdout stream task panicked")?
+            .context("failed to stream command stdout")?;
+    }
+    if let Some(task) = stderr_task {
+        task.await
+            .context("stderr stream task panicked")?
+            .context("failed to stream command stderr")?;
+    }
+
+    Ok(status)
 }
 
-async fn stream_output<R>(
-    reader: R,
-    prefix: String,
-    task: String,
-    sink: OutputSink,
-    is_stderr: bool,
-) -> Result<()>
+async fn stream_output<R>(reader: R, prefix: String, is_stderr: bool) -> Result<()>
 where
     R: AsyncRead + Unpin,
 {
     let mut lines = BufReader::new(reader).lines();
     while let Some(line) = lines.next_line().await? {
-        sink.line(&task, format!("{prefix} {line}"), is_stderr);
+        if is_stderr {
+            eprintln!("{prefix} {line}");
+        } else {
+            println!("{prefix} {line}");
+        }
     }
     Ok(())
 }
 
+/// Encourage color output from piped children (they can't see a TTY).
 fn apply_color_envs(command: &mut Command) {
     if std::env::var_os("NO_COLOR").is_none() {
         command

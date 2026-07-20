@@ -1,7 +1,6 @@
 //! Structured errors for the `buona run` command with specific exit codes.
 
 use std::fmt;
-use std::process;
 
 /// Structured errors for the run command.
 ///
@@ -36,12 +35,6 @@ impl RunError {
             RunError::CommandFailed { exit_code, .. } => *exit_code,
             RunError::HookFailed { exit_code, .. } => *exit_code,
         }
-    }
-
-    /// Print the error to stderr and exit with the appropriate code.
-    pub(crate) fn exit(&self) -> ! {
-        eprintln!("error: {self}");
-        process::exit(self.exit_code());
     }
 }
 

@@ -16,6 +16,12 @@ pub(crate) struct UpdateOptions {
     pub(crate) check: bool,
     /// Skip confirmation prompt.
     pub(crate) yes: bool,
+    /// Allow installing when no `.sha256` checksum asset is published.
+    ///
+    /// Verification still runs (and fails hard) when a checksum asset exists
+    /// but does not match. This flag only relaxes the "checksum required"
+    /// policy for older releases that never shipped digests.
+    pub(crate) force_insecure: bool,
     /// Specific version to install (e.g. "v0.1.5" or "0.1.5").
     pub(crate) version: Option<String>,
 }
@@ -129,23 +135,39 @@ pub(crate) async fn update(options: UpdateOptions) -> Result<()> {
 
     let archive_bytes = github::download_asset(&archive_asset.browser_download_url).await?;
 
-    // Verify checksum
-    if let Some(cs_asset) = checksum_asset {
-        println!("  {} Verifying checksum ...", s.dim.apply_to("→"),);
+    // Checksum verification is mandatory unless --force-insecure is passed.
+    // Replacing the running binary without a digest is a trust footgun.
+    match checksum_asset {
+        Some(cs_asset) => {
+            println!("  {} Verifying checksum ...", s.dim.apply_to("→"),);
 
-        let expected = github::download_checksum(&cs_asset.browser_download_url).await?;
-        let actual = sha256_hex(&archive_bytes);
+            let expected = github::download_checksum(&cs_asset.browser_download_url).await?;
+            let actual = sha256_hex(&archive_bytes);
 
-        if actual != expected {
-            bail!(
-                "checksum mismatch!\n  \
-                 expected: {expected}\n  \
-                 actual:   {actual}\n  \
-                 The downloaded file may be corrupted."
+            if actual != expected {
+                bail!(
+                    "checksum mismatch!\n  \
+                     expected: {expected}\n  \
+                     actual:   {actual}\n  \
+                     The downloaded file may be corrupted."
+                );
+            }
+
+            println!("  {} Checksum verified", s.green.apply_to("✔"),);
+        }
+        None if options.force_insecure => {
+            println!(
+                "  {} No checksum asset found — installing anyway (--force-insecure)",
+                s.yellow.apply_to("⚠"),
             );
         }
-
-        println!("  {} Checksum verified", s.green.apply_to("✔"),);
+        None => {
+            bail!(
+                "no checksum asset found for platform \"{target}\".\n  \
+                 Refusing to install an unverified binary.\n  \
+                 Re-run with --force-insecure to override (not recommended)."
+            );
+        }
     }
 
     // Extract binary from tar.gz
@@ -234,26 +256,33 @@ fn replace_binary(target: &std::path::Path, data: &[u8]) -> Result<()> {
             .unwrap_or(0)
     ));
 
-    // Write new binary
-    std::fs::write(&tmp_path, data)
-        .with_context(|| format!("could not write temp file: {}", tmp_path.display()))?;
+    // Write new binary + set executable permissions, then atomically rename.
+    // Clean up the temp file on any failure so aborted updates leave nothing
+    // behind in the install directory.
+    let install = || -> Result<()> {
+        std::fs::write(&tmp_path, data)
+            .with_context(|| format!("could not write temp file: {}", tmp_path.display()))?;
 
-    // Set executable permissions
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755))
-            .with_context(|| format!("could not set permissions on {}", tmp_path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755))
+                .with_context(|| format!("could not set permissions on {}", tmp_path.display()))?;
+        }
+
+        std::fs::rename(&tmp_path, target).with_context(|| {
+            format!(
+                "could not replace binary at {}\n  \
+                 You may need elevated privileges (e.g. sudo).",
+                target.display()
+            )
+        })
+    };
+
+    if let Err(e) = install() {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
     }
-
-    // Atomic rename
-    std::fs::rename(&tmp_path, target).with_context(|| {
-        format!(
-            "could not replace binary at {}\n  \
-             You may need elevated privileges (e.g. sudo).",
-            target.display()
-        )
-    })?;
 
     Ok(())
 }

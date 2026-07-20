@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use tokio::process::Command;
 
-use crate::config;
+use crate::config::BuonaConfig;
 use crate::styles::Styles;
 
 use super::types::read_meta;
@@ -14,9 +14,8 @@ use super::workspace_file::sync_workspace_file;
 /// Open a workspace at a specific root in the configured editor.
 ///
 /// Internal helper that opens the workspace without resolving by name.
-pub(super) async fn open_workspace_at(ws_root: &Path) -> Result<()> {
+pub(super) async fn open_workspace_at(ws_root: &Path, cfg: &BuonaConfig) -> Result<()> {
     let s = Styles::default();
-    let cfg = config::load_config().await?;
 
     let meta = read_meta(ws_root)
         .await?

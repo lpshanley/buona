@@ -2,6 +2,7 @@
 //! plan resolution, and process execution.
 
 use std::env;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 
@@ -15,6 +16,27 @@ use super::output;
 use super::planner::{TargetRunPlan, resolve_target_run_plan};
 use super::targets::resolve_targets;
 use super::types::{BuildSystem, FailPolicy};
+
+/// True when `find_workspace_root` failed because no marker was found (vs I/O).
+fn is_not_in_workspace_error(err: &anyhow::Error) -> bool {
+    err.chain()
+        .any(|cause| cause.to_string().starts_with("not inside a workspace"))
+}
+
+/// Resolve the workspace root, mapping only the "no marker found" case to
+/// [`RunError::NotInWorkspace`]. Real I/O failures are preserved.
+pub(super) async fn require_workspace_root(cwd: &Path) -> Result<std::path::PathBuf> {
+    match workspace::find_workspace_root(cwd).await {
+        Ok(root) => Ok(root),
+        Err(e) if is_not_in_workspace_error(&e) => Err(RunError::NotInWorkspace(
+            "not inside a buona workspace (no buona.workspace.json found)\n  \
+             Run this command from within a workspace."
+                .to_string(),
+        )
+        .into()),
+        Err(e) => Err(e),
+    }
+}
 
 /// CLI options for the run command, parsed by clap and passed from main.
 pub(crate) struct RunOptions {
@@ -62,13 +84,7 @@ pub(crate) async fn execute(options: RunOptions) -> Result<()> {
     }
 
     let cwd = env::current_dir().context("could not determine current directory")?;
-    let ws_root = workspace::find_workspace_root(&cwd).await.map_err(|_| {
-        RunError::NotInWorkspace(
-            "not inside a buona workspace (no buona.workspace.json found)\n  \
-             Run this command from within a workspace."
-                .to_string(),
-        )
-    })?;
+    let ws_root = require_workspace_root(&cwd).await?;
 
     if options.recursive {
         return executor::execute_recursive(&options, &ws_root, execution).await;

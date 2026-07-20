@@ -9,13 +9,6 @@ pub(super) struct VscodeWorkspaceFolder {
     pub(super) name: String,
 }
 
-/// The top-level structure of a `.code-workspace` file.
-#[derive(Debug, Serialize)]
-pub(super) struct VscodeWorkspace {
-    pub(super) folders: Vec<VscodeWorkspaceFolder>,
-    pub(super) settings: serde_json::Value,
-}
-
 /// Sanitize a workspace name into a filename-safe and shell-safe string.
 ///
 /// Replaces any character that is not alphanumeric, hyphen, underscore, or
@@ -93,47 +86,20 @@ mod tests {
         assert_eq!(sanitize_name("My Cool Project!"), "My-Cool-Project");
     }
 
-    // ── VscodeWorkspace serialization tests ──────────────────────────
+    // ── folder serialization tests ──────────────────────────────────
 
     #[test]
-    fn vscode_workspace_serializes_correctly() {
-        let ws = VscodeWorkspace {
-            folders: vec![
-                VscodeWorkspaceFolder {
-                    path: "src/toolkit".to_string(),
-                    name: "toolkit".to_string(),
-                },
-                VscodeWorkspaceFolder {
-                    path: "src/utils".to_string(),
-                    name: "utils".to_string(),
-                },
-            ],
-            settings: serde_json::json!({}),
+    fn vscode_workspace_folder_serializes_correctly() {
+        let folder = VscodeWorkspaceFolder {
+            path: "src/toolkit".to_string(),
+            name: "toolkit".to_string(),
         };
 
         let json: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string_pretty(&ws).unwrap()).unwrap();
+            serde_json::from_str(&serde_json::to_string(&folder).unwrap()).unwrap();
 
-        assert!(json["folders"].is_array());
-        assert_eq!(json["folders"].as_array().unwrap().len(), 2);
-        assert_eq!(json["folders"][0]["path"], "src/toolkit");
-        assert_eq!(json["folders"][0]["name"], "toolkit");
-        assert_eq!(json["folders"][1]["path"], "src/utils");
-        assert_eq!(json["folders"][1]["name"], "utils");
-        assert_eq!(json["settings"], serde_json::json!({}));
-    }
-
-    #[test]
-    fn vscode_workspace_empty_folders() {
-        let ws = VscodeWorkspace {
-            folders: vec![],
-            settings: serde_json::json!({}),
-        };
-
-        let json: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string_pretty(&ws).unwrap()).unwrap();
-
-        assert!(json["folders"].as_array().unwrap().is_empty());
+        assert_eq!(json["path"], "src/toolkit");
+        assert_eq!(json["name"], "toolkit");
     }
 
     // ── sync-related tests ──────────────────────────────────────────

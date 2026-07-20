@@ -1,6 +1,7 @@
 //! CLI entry point for the buona workspace manager.
 
 mod config;
+mod fsutil;
 mod path_value;
 mod run;
 mod self_update;
@@ -8,6 +9,7 @@ mod styles;
 mod workspace;
 
 use std::path::Path;
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
@@ -53,7 +55,8 @@ enum Commands {
 
     /// Run a command in the current context or explicit target(s)
     Run {
-        /// Force a specific build system (overrides auto-detection)
+        /// Force a specific build system (overrides auto-detection and the
+        /// global `system` in buona.json; per-command overrides still win)
         #[arg(long, value_enum)]
         system: Option<run::BuildSystem>,
 
@@ -391,15 +394,36 @@ enum SelfCommands {
         #[arg(short, long)]
         yes: bool,
 
+        /// Allow install when the release has no `.sha256` checksum asset
+        #[arg(long)]
+        force_insecure: bool,
+
         /// Install a specific version (e.g. v0.1.5 or 0.1.5)
         version: Option<String>,
     },
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    match dispatch(cli).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            // RunError carries a specific exit code (forwarded child exit
+            // codes, or the documented 64/65/68/69 config errors).
+            if let Some(run_err) = e.downcast_ref::<run::RunError>() {
+                eprintln!("error: {run_err}");
+                return ExitCode::from(run_err.exit_code().clamp(1, 255) as u8);
+            }
+            // {:#} prints the anyhow context chain in a readable form.
+            eprintln!("error: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn dispatch(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Commands::Config { command } => match command {
             ConfigCommands::Show { json } => {
@@ -542,13 +566,7 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Commands::Detect { targets, recursive } => {
-            if let Err(e) = run::detect(targets, recursive).await {
-                if let Some(run_err) = e.downcast_ref::<run::RunError>() {
-                    run_err.exit();
-                }
-                eprintln!("error: {e:?}");
-                std::process::exit(1);
-            }
+            run::detect(targets, recursive).await?;
         }
         Commands::Run {
             system,
@@ -574,23 +592,19 @@ async fn main() -> anyhow::Result<()> {
                 command,
                 args,
             };
-            if let Err(e) = run::execute(options).await {
-                if let Some(run_err) = e.downcast_ref::<run::RunError>() {
-                    run_err.exit();
-                }
-                eprintln!("error: {e:?}");
-                std::process::exit(1);
-            }
+            run::execute(options).await?;
         }
         Commands::Self_ { command } => match command {
             SelfCommands::Update {
                 check,
                 yes,
+                force_insecure,
                 version,
             } => {
                 self_update::update(self_update::UpdateOptions {
                     check,
                     yes,
+                    force_insecure,
                     version,
                 })
                 .await?;

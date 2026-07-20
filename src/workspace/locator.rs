@@ -46,11 +46,19 @@ pub(super) async fn find_workspace(query: &str) -> Result<PathBuf> {
 pub(crate) async fn find_workspace_root(start: &Path) -> Result<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
-        if tokio::fs::try_exists(dir.join(WORKSPACE_FILE))
-            .await
-            .unwrap_or(false)
-        {
-            return Ok(dir);
+        let marker = dir.join(WORKSPACE_FILE);
+        match tokio::fs::try_exists(&marker).await {
+            Ok(true) => return Ok(dir),
+            Ok(false) => {}
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "could not check for {} in {}",
+                        WORKSPACE_FILE,
+                        dir.display()
+                    )
+                });
+            }
         }
 
         if !dir.pop() {

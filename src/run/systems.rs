@@ -40,7 +40,7 @@ pub(super) fn refine_python_system(pyproject_content: &str) -> BuildSystem {
 /// Detect the gradle program to use, preferring `./gradlew` if present.
 fn detect_gradle_program(dir: Option<&Path>) -> String {
     if let Some(d) = dir
-        && d.join("gradlew").exists()
+        && std::fs::exists(d.join("gradlew")).unwrap_or(false)
     {
         return "./gradlew".to_string();
     }
@@ -50,7 +50,7 @@ fn detect_gradle_program(dir: Option<&Path>) -> String {
 /// Detect the maven program to use, preferring `./mvnw` if present.
 fn detect_maven_program(dir: Option<&Path>) -> String {
     if let Some(d) = dir
-        && d.join("mvnw").exists()
+        && std::fs::exists(d.join("mvnw")).unwrap_or(false)
     {
         return "./mvnw".to_string();
     }

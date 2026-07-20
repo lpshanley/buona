@@ -13,7 +13,9 @@ use anyhow::{Context, Result};
 /// or the command fails.
 pub(super) async fn detect_remote_url(dir: &Path) -> String {
     let result = Command::new("git")
-        .args(["-C", &dir.to_string_lossy(), "remote", "get-url", "origin"])
+        .arg("-C")
+        .arg(dir)
+        .args(["remote", "get-url", "origin"])
         .output()
         .await;
     result
@@ -32,13 +34,9 @@ pub(super) async fn detect_remote_url(dir: &Path) -> String {
 /// detached, or the command fails.
 pub(super) async fn detect_branch(dir: &Path) -> String {
     let result = Command::new("git")
-        .args([
-            "-C",
-            &dir.to_string_lossy(),
-            "rev-parse",
-            "--abbrev-ref",
-            "HEAD",
-        ])
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .await;
     result

@@ -5,10 +5,10 @@ use std::env;
 use anyhow::{Context, Result};
 
 use crate::styles::Styles;
-use crate::workspace;
 
 use super::detect::detect_all_systems;
 use super::error::RunError;
+use super::ops::require_workspace_root;
 use super::targets::resolve_targets;
 
 /// Print the auto-detected build system and all marker files found.
@@ -23,13 +23,7 @@ pub(super) async fn detect(targets: Vec<String>, recursive: bool) -> Result<()> 
     }
 
     let cwd = env::current_dir().context("could not determine current directory")?;
-    let ws_root = workspace::find_workspace_root(&cwd).await.map_err(|_| {
-        RunError::NotInWorkspace(
-            "not inside a buona workspace (no buona.workspace.json found)\n  \
-             Run this command from within a workspace."
-                .to_string(),
-        )
-    })?;
+    let ws_root = require_workspace_root(&cwd).await?;
 
     let detect_targets = resolve_targets(&cwd, &ws_root, &targets, recursive).await?;
 

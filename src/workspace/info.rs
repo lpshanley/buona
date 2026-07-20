@@ -13,11 +13,6 @@ use super::packages::list_package_names;
 use super::types::{WorkspaceMeta, read_meta};
 use super::vscode::sanitize_name;
 
-/// Resolve the effective git tracking mode for a workspace.
-fn resolve_git_tracking(meta: &WorkspaceMeta, cfg: &config::BuonaConfig) -> GitTracking {
-    meta.git_tracking.unwrap_or(cfg.git.tracking)
-}
-
 /// Detect the git remote origin URL for a directory, if it is a git repo.
 async fn detect_git_remote_url(dir: &Path) -> String {
     git_ops::detect_remote_url(dir).await
@@ -40,7 +35,7 @@ pub(super) async fn show_info(ws_root: &Path, json: bool) -> Result<()> {
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
     let cfg = config::load_config().await?;
-    let tracking = resolve_git_tracking(&meta, &cfg);
+    let tracking = meta.effective_tracking(&cfg);
 
     let src_dir = ws_root.join("src");
     let pkg_names = list_package_names(ws_root).await?;

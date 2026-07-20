@@ -4,8 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::config;
-use crate::config::GitTracking;
+use crate::config::{BuonaConfig, GitTracking};
 use crate::styles::Styles;
 
 use super::git::resolve_package_spec;
@@ -16,15 +15,18 @@ use super::workspace_file::sync_workspace_file;
 /// Add packages to a specific workspace root.
 ///
 /// Internal helper that adds packages to `src/` without resolving workspace by name.
-pub(super) async fn add_packages_to_workspace(ws_root: &Path, packages: &[String]) -> Result<()> {
+pub(super) async fn add_packages_to_workspace(
+    ws_root: &Path,
+    packages: &[String],
+    cfg: &BuonaConfig,
+) -> Result<()> {
     let s = Styles::default();
-    let cfg = config::load_config().await?;
 
     let meta = read_meta(ws_root)
         .await?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
-    let tracking = meta.git_tracking.unwrap_or(cfg.git.tracking);
+    let tracking = meta.effective_tracking(cfg);
     let src_dir = ws_root.join("src");
 
     println!();

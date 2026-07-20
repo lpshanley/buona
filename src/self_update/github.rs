@@ -1,27 +1,46 @@
 //! Async GitHub Releases API client.
 
+use std::sync::LazyLock;
+use std::time::Duration;
+
 use anyhow::{Context, Result, bail};
 use reqwest::Client;
-use std::time::Duration;
 
 use super::types::{GitHubAsset, GitHubRelease};
 
 const REPO: &str = "lpshanley/buona";
 
-fn client() -> Result<Client> {
+/// Shared HTTP client. Timeout is generous so large binary downloads are not
+/// cut off mid-transfer; API calls finish well under this budget.
+static CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
         .user_agent(format!("buona/{}", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(300))
         .build()
-        .context("failed to create HTTP client")
+        .expect("failed to create HTTP client")
+});
+
+fn client() -> &'static Client {
+    &CLIENT
+}
+
+/// Build a GET request against the GitHub API, attaching `GITHUB_TOKEN` when
+/// present to avoid the low unauthenticated rate limit (e.g. in CI).
+fn api_get(url: &str) -> reqwest::RequestBuilder {
+    let mut req = client().get(url);
+    if let Ok(token) = std::env::var("GITHUB_TOKEN")
+        && !token.is_empty()
+    {
+        req = req.bearer_auth(token);
+    }
+    req
 }
 
 /// Fetch the latest published release.
 pub(super) async fn fetch_latest_release() -> Result<GitHubRelease> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let resp = client()?
-        .get(&url)
+    let resp = api_get(&url)
         .send()
         .await
         .context("failed to reach GitHub — check your network connection")?;
@@ -41,8 +60,7 @@ pub(super) async fn fetch_latest_release() -> Result<GitHubRelease> {
 /// Fetch a release by its exact tag name (e.g. "v0.1.5").
 pub(super) async fn fetch_release_by_tag(tag: &str) -> Result<GitHubRelease> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/tags/{tag}");
-    let resp = client()?
-        .get(&url)
+    let resp = api_get(&url)
         .send()
         .await
         .context("failed to reach GitHub — check your network connection")?;
@@ -61,7 +79,7 @@ pub(super) async fn fetch_release_by_tag(tag: &str) -> Result<GitHubRelease> {
 
 /// Download a release asset and return its raw bytes.
 pub(super) async fn download_asset(url: &str) -> Result<Vec<u8>> {
-    let resp = client()?
+    let resp = client()
         .get(url)
         .send()
         .await

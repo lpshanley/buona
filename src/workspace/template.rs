@@ -4,66 +4,22 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::fsutil;
+
 /// Copy the contents of `template_dir` into `target`, preserving directory
 /// structure and file permissions. Skips `buona.workspace.json` and any
 /// `.code-workspace` file to avoid overwriting workspace metadata.
 pub(super) async fn apply_template(template_dir: &Path, target: &Path) -> Result<()> {
-    copy_dir_recursive(template_dir, target).await
-}
-
-fn copy_dir_recursive<'a>(
-    src: &'a Path,
-    dst: &'a Path,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
-    Box::pin(copy_dir_recursive_inner(src, dst))
-}
-
-async fn copy_dir_recursive_inner(src: &Path, dst: &Path) -> Result<()> {
-    let mut entries = tokio::fs::read_dir(src)
-        .await
-        .with_context(|| format!("could not read template directory: {}", src.display()))?;
-
-    while let Some(entry) = entries.next_entry().await? {
-        let file_name = entry.file_name();
-        let name = file_name.to_string_lossy();
-
-        // Skip workspace metadata files
-        if name == "buona.workspace.json" || name.ends_with(".code-workspace") {
-            continue;
-        }
-
-        let src_path = entry.path();
-        let dst_path = dst.join(&file_name);
-        let file_type = entry.file_type().await?;
-
-        if file_type.is_dir() {
-            tokio::fs::create_dir_all(&dst_path)
-                .await
-                .with_context(|| format!("could not create directory: {}", dst_path.display()))?;
-            copy_dir_recursive(&src_path, &dst_path).await?;
-        } else {
-            tokio::fs::copy(&src_path, &dst_path)
-                .await
-                .with_context(|| {
-                    format!(
-                        "could not copy {} to {}",
-                        src_path.display(),
-                        dst_path.display()
-                    )
-                })?;
-
-            // Preserve permissions (important for executable hooks).
-            // tokio::fs::copy on unix preserves permissions via the underlying
-            // std::fs::copy, but we re-apply explicitly to be defensive.
-            #[cfg(unix)]
-            {
-                let metadata = tokio::fs::metadata(&src_path).await?;
-                tokio::fs::set_permissions(&dst_path, metadata.permissions()).await?;
-            }
-        }
-    }
-
-    Ok(())
+    fsutil::copy_dir_recursive(template_dir, target, |name| {
+        name == "buona.workspace.json" || name.ends_with(".code-workspace")
+    })
+    .await
+    .with_context(|| {
+        format!(
+            "could not read template directory: {}",
+            template_dir.display()
+        )
+    })
 }
 
 #[cfg(test)]

@@ -4,21 +4,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::config;
-use crate::config::GitTracking;
+use crate::config::{BuonaConfig, GitTracking};
 use crate::styles::Styles;
 
 use super::git_ops;
 use super::packages::list_package_names;
 use super::types::{WorkspaceMeta, read_meta};
 use super::workspace_file::sync_workspace_file;
-
-/// Resolve the effective git tracking mode for a workspace.
-///
-/// Priority: workspace-level override > global config default > hardcoded Package.
-fn resolve_git_tracking(meta: &WorkspaceMeta, cfg: &config::BuonaConfig) -> GitTracking {
-    meta.git_tracking.unwrap_or(cfg.git.tracking)
-}
 
 /// Pull (or fetch) the latest changes for tracked packages and re-sync the
 /// `.code-workspace` file.
@@ -32,6 +24,7 @@ pub(super) async fn sync_workspace(
     ws_root: &Path,
     packages: &[String],
     fetch_only: bool,
+    cfg: &BuonaConfig,
 ) -> Result<PathBuf> {
     let s = Styles::default();
 
@@ -39,8 +32,7 @@ pub(super) async fn sync_workspace(
         .await?
         .context("could not read workspace metadata — is this a valid buona workspace?")?;
 
-    let cfg = config::load_config().await?;
-    let tracking = resolve_git_tracking(&meta, &cfg);
+    let tracking = meta.effective_tracking(cfg);
 
     println!();
     println!(

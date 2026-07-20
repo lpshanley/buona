@@ -185,7 +185,7 @@ pub(crate) fn expand_tilde(path: &str) -> Result<PathBuf> {
 pub(crate) async fn workspace_dir() -> Result<PathBuf> {
     let cfg = load_config().await?;
     let dir = expand_tilde(&cfg.workspace_dir)?;
-    if !dir.exists() {
+    if !tokio::fs::try_exists(&dir).await.unwrap_or(false) {
         tokio::fs::create_dir_all(&dir)
             .await
             .with_context(|| format!("could not create workspace directory: {}", dir.display()))?;
@@ -227,7 +227,7 @@ pub(crate) async fn save_config(config: &BuonaConfig) -> Result<()> {
             .with_context(|| format!("could not create config directory: {}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(config)?;
-    tokio::fs::write(&path, json + "\n")
+    crate::fsutil::write_atomic(&path, &(json + "\n"))
         .await
         .with_context(|| format!("could not write config file: {}", path.display()))?;
     Ok(())
@@ -419,18 +419,31 @@ pub(crate) async fn run_setup() -> Result<()> {
     Ok(())
 }
 
-/// Set a global config value by key path.
-pub(crate) async fn set_value(key: &str, raw_value: Option<&str>, json_mode: bool) -> Result<()> {
+/// Load the config, apply `mutate` to its JSON form, validate strictly, and
+/// save. Strict validation means a mutation that introduces a key the config
+/// struct doesn't know about (e.g. a typo'd `set`) errors instead of being
+/// silently dropped on save.
+async fn update_config<F>(mutate: F) -> Result<()>
+where
+    F: FnOnce(&mut Value) -> Result<()>,
+{
     let cfg = load_config().await?;
-    let mut value = serde_json::to_value(&cfg)?;
-    let tokens = path_value::parse_path(key)?;
-    let current = path_value::get_path(&value, &tokens).ok();
-    let parsed = path_value::parse_set_value(raw_value, json_mode, current)?;
-
-    path_value::set_path(&mut value, &tokens, parsed)?;
-    let next: BuonaConfig = serde_json::from_value(value)?;
+    let mut doc = serde_json::to_value(&cfg)?;
+    mutate(&mut doc)?;
+    let next: BuonaConfig = path_value::from_value_strict(doc)?;
     save_config(&next).await?;
     Ok(())
+}
+
+/// Set a global config value by key path.
+pub(crate) async fn set_value(key: &str, raw_value: Option<&str>, json_mode: bool) -> Result<()> {
+    let tokens = path_value::parse_path(key)?;
+    update_config(|doc| {
+        let current = path_value::get_path(doc, &tokens).ok().cloned();
+        let parsed = path_value::parse_set_value(raw_value, json_mode, current.as_ref())?;
+        path_value::set_path(doc, &tokens, parsed)
+    })
+    .await
 }
 
 /// Get a global config value by key path.
@@ -444,37 +457,28 @@ pub(crate) async fn get_value(key: &str) -> Result<()> {
 
 /// Add values to a list field in the global config.
 pub(crate) async fn add_to_list(key: &str, values: &[String]) -> Result<()> {
-    let cfg = load_config().await?;
-    let mut doc = serde_json::to_value(&cfg)?;
     let tokens = path_value::parse_path(key)?;
-    let json_values = values.iter().map(|v| Value::String(v.clone())).collect();
-    path_value::append_to_array(&mut doc, &tokens, json_values)?;
-    let next: BuonaConfig = serde_json::from_value(doc)?;
-    save_config(&next).await?;
-    Ok(())
+    update_config(|doc| {
+        let json_values = values.iter().map(|v| Value::String(v.clone())).collect();
+        path_value::append_to_array(doc, &tokens, json_values)
+    })
+    .await
 }
 
 /// Remove values from a list field in the global config.
 pub(crate) async fn remove_from_list(key: &str, values: &[String]) -> Result<()> {
-    let cfg = load_config().await?;
-    let mut doc = serde_json::to_value(&cfg)?;
     let tokens = path_value::parse_path(key)?;
-    let json_values: Vec<Value> = values.iter().map(|v| Value::String(v.clone())).collect();
-    path_value::remove_from_array(&mut doc, &tokens, &json_values)?;
-    let next: BuonaConfig = serde_json::from_value(doc)?;
-    save_config(&next).await?;
-    Ok(())
+    update_config(|doc| {
+        let json_values: Vec<Value> = values.iter().map(|v| Value::String(v.clone())).collect();
+        path_value::remove_from_array(doc, &tokens, &json_values)
+    })
+    .await
 }
 
 /// Unset a global config value by key path.
 pub(crate) async fn unset_value(key: &str) -> Result<()> {
-    let cfg = load_config().await?;
-    let mut value = serde_json::to_value(cfg)?;
     let tokens = path_value::parse_path(key)?;
-    path_value::unset_path(&mut value, &tokens)?;
-    let next: BuonaConfig = serde_json::from_value(value)?;
-    save_config(&next).await?;
-    Ok(())
+    update_config(|doc| path_value::unset_path(doc, &tokens)).await
 }
 #[cfg(test)]
 mod tests {

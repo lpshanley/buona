@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::config::GitTracking;
+use crate::config::{BuonaConfig, GitTracking};
 
 pub(super) const WORKSPACE_FILE: &str = "buona.workspace.json";
 
@@ -24,6 +24,15 @@ pub(crate) struct WorkspaceMeta {
     /// When `None`, behaves like `false`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) mount_root: Option<bool>,
+}
+
+impl WorkspaceMeta {
+    /// Resolve the effective git tracking mode for this workspace.
+    ///
+    /// Priority: workspace-level override > global config default.
+    pub(crate) fn effective_tracking(&self, cfg: &BuonaConfig) -> GitTracking {
+        self.git_tracking.unwrap_or(cfg.git.tracking)
+    }
 }
 
 /// Read workspace metadata from a directory, if a `buona.workspace.json` exists.
@@ -49,7 +58,7 @@ pub(crate) async fn read_meta(dir: &Path) -> Result<Option<WorkspaceMeta>> {
 pub(super) async fn write_meta(dir: &Path, meta: &WorkspaceMeta) -> Result<()> {
     let meta_path = dir.join(WORKSPACE_FILE);
     let json = serde_json::to_string_pretty(meta)?;
-    tokio::fs::write(&meta_path, json + "\n")
+    crate::fsutil::write_atomic(&meta_path, &(json + "\n"))
         .await
         .with_context(|| format!("could not write {WORKSPACE_FILE}"))?;
     Ok(())

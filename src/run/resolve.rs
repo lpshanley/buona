@@ -139,9 +139,11 @@ pub(super) async fn resolve_plan(input: &ResolveInput) -> Result<ExecutionPlan, 
 
 /// Resolve the effective build system from the precedence chain:
 ///
-/// 1. Per-command override in buona.json
-/// 2. Global system in buona.json (if not "auto")
-/// 3. CLI `--system` (if not "auto")
+/// 1. Per-command override in buona.json (most specific intent)
+/// 2. CLI `--system` — an explicit flag on this invocation beats the
+///    file-level default, matching how every mainstream tool treats
+///    flag-vs-config precedence
+/// 3. Global system in buona.json (if not "auto")
 /// 4. Auto-detection from marker files
 async fn resolve_effective_system(
     per_command: Option<BuildSystem>,
@@ -154,17 +156,17 @@ async fn resolve_effective_system(
         return Ok(Some(system));
     }
 
-    // 2. Global system in buona.json
+    // 2. CLI --system
+    if let Some(system) = cli_system {
+        return Ok(Some(system));
+    }
+
+    // 3. Global system in buona.json
     if let Some(config) = package_config {
         match config.system {
             ConfigSystem::Fixed(system) => return Ok(Some(system)),
             ConfigSystem::Auto => {}
         }
-    }
-
-    // 3. CLI --system
-    if let Some(system) = cli_system {
-        return Ok(Some(system));
     }
 
     // 4. Auto-detect
@@ -457,7 +459,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn global_config_beats_cli_system() {
+    async fn cli_system_beats_global_config() {
         let dir = TempDir::new().unwrap();
         let config = BuonaRunConfig {
             system: ConfigSystem::Fixed(BuildSystem::Npm),
@@ -473,7 +475,35 @@ mod tests {
             package_config: Some(config),         // config says npm
         };
         let plan = resolve_plan(&input).await.unwrap();
-        assert_eq!(plan.system, Some(BuildSystem::Npm)); // config wins
+        assert_eq!(plan.system, Some(BuildSystem::Cargo)); // explicit flag wins
+    }
+
+    #[tokio::test]
+    async fn per_command_config_beats_cli_system() {
+        let dir = TempDir::new().unwrap();
+        let mut commands = HashMap::new();
+        commands.insert(
+            "build".to_string(),
+            super::super::config::CommandConfig {
+                system: Some(BuildSystem::Make),
+                exec: None,
+            },
+        );
+        let config = BuonaRunConfig {
+            system: ConfigSystem::Auto,
+            commands,
+            hooks_dir: ".buona/hooks".to_string(),
+            hooks: HashMap::new(),
+        };
+        let input = ResolveInput {
+            package_dir: dir.path().to_path_buf(),
+            command: "build".to_string(),
+            extra_args: vec![],
+            cli_system: Some(BuildSystem::Cargo), // CLI says cargo
+            package_config: Some(config),         // per-command says make
+        };
+        let plan = resolve_plan(&input).await.unwrap();
+        assert_eq!(plan.system, Some(BuildSystem::Make)); // most specific wins
     }
 
     #[tokio::test]
