@@ -334,6 +334,59 @@ pub(crate) async fn delete(query: &str, force: bool) -> Result<()> {
     Ok(())
 }
 
+/// Rename a workspace by old name to a new name. Renames the directory on disk
+/// and updates metadata if needed.
+pub(crate) async fn rename(old_name: &str, new_name: &str) -> Result<()> {
+    let s = Styles::default();
+
+    let workspace_dir = config::workspace_dir().await?;
+    let old_path = locator::find_workspace(old_name).await?;
+
+    let meta = read_meta(&old_path)
+        .await?
+        .context("workspace metadata not found")?;
+
+    let old_display = meta.name.clone();
+
+    // Check if new_name is already taken as a directory name
+    let new_path = workspace_dir.join(new_name);
+    if new_path.exists() {
+        bail!(
+            "a workspace with directory name \"{}\" already exists",
+            new_name
+        );
+    }
+
+    // Rename the directory
+    tokio::fs::rename(&old_path, &new_path)
+        .await
+        .with_context(|| {
+            format!(
+                "could not rename workspace directory from {} to {}",
+                old_path.display(),
+                new_path.display()
+            )
+        })?;
+
+    // Update metadata name to match the new directory name
+    let mut new_meta = meta;
+    new_meta.name = new_name.to_string();
+
+    write_meta(&new_path, &new_meta).await?;
+
+    println!();
+    println!(
+        "  {} Renamed workspace {} → {}",
+        s.green.apply_to("✔"),
+        s.bold.apply_to(&old_display),
+        s.bold.apply_to(new_name)
+    );
+    println!("  {}  {}", s.dim.apply_to("Location:"), new_path.display());
+    println!();
+
+    Ok(())
+}
+
 /// Add one or more packages to a workspace by cloning them into `src/`.
 ///
 /// If `workspace` is provided, it is looked up by name or directory.
@@ -1184,5 +1237,34 @@ mod tests {
             !ws_path.join("CLAUDE.md").exists(),
             "CLAUDE.md should not exist when no_template is true"
         );
+    }
+
+    // ── rename tests ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn rename_workspace_updates_directory_and_metadata() {
+        let ws_dir = TempDir::new().unwrap();
+        let old_path = ws_dir.path().join("old-name");
+        let new_path = ws_dir.path().join("new-name");
+
+        setup_workspace(&old_path, "old-name").await;
+
+        // Verify old metadata exists
+        let meta = read_meta(&old_path).await.unwrap().unwrap();
+        assert_eq!(meta.name, "old-name");
+
+        // Rename the directory
+        tokio::fs::rename(&old_path, &new_path).await.unwrap();
+
+        // Update metadata
+        let mut new_meta = meta;
+        new_meta.name = "new-name".to_string();
+        write_meta(&new_path, &new_meta).await.unwrap();
+
+        // Verify new path exists and has updated metadata
+        assert!(new_path.exists());
+        assert!(!old_path.exists());
+        let updated_meta = read_meta(&new_path).await.unwrap().unwrap();
+        assert_eq!(updated_meta.name, "new-name");
     }
 }
