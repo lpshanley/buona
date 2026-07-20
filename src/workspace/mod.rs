@@ -19,6 +19,6 @@ mod workspace_file;
 pub(crate) use locator::find_workspace_root;
 pub(crate) use ops::{
     CreateOptions, add, adopt, config_add, config_get, config_remove, config_set, config_unset,
-    create, delete, info, list, open, remove_packages, sync,
+    create, delete, info, list, open, remove_packages, rename, sync,
 };
 pub(crate) use packages::list_package_names;

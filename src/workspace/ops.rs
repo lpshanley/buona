@@ -22,6 +22,7 @@ use super::open_workspace::open_workspace_at;
 use super::remove_packages::remove_packages_from_workspace;
 use super::sync_packages::sync_workspace;
 use super::types::{WorkspaceMeta, read_meta, write_meta};
+use super::vscode::sanitize_name;
 use super::workspace_file::sync_workspace_file;
 
 /// Resolve workspace root from an optional workspace selector.
@@ -328,6 +329,135 @@ pub(crate) async fn delete(query: &str, force: bool) -> Result<()> {
         "  {} Deleted workspace {}",
         s.green.apply_to("✔"),
         s.bold.apply_to(display_name)
+    );
+    println!();
+
+    Ok(())
+}
+
+/// Rename a workspace by name or directory name.
+///
+/// Updates the metadata name and, unless `keep_directory` is true, renames the
+/// workspace directory to match. The stale `.code-workspace` file is removed
+/// and regenerated under the new name.
+pub(crate) async fn rename(query: &str, new_name: &str, keep_directory: bool) -> Result<()> {
+    let source = locator::find_workspace(query).await?;
+    rename_workspace_at(&source, new_name, keep_directory).await
+}
+
+async fn rename_workspace_at(source: &Path, new_name: &str, keep_directory: bool) -> Result<()> {
+    let s = Styles::default();
+
+    // Reject names that are empty or would escape the workspace directory
+    if new_name.is_empty() || new_name == "." || new_name == ".." || new_name.contains(['/', '\\'])
+    {
+        bail!("invalid workspace name: \"{new_name}\"");
+    }
+
+    // The new name must survive sanitization to produce a workspace filename
+    if sanitize_name(new_name).is_empty() {
+        bail!("workspace name \"{new_name}\" produces an empty filename after sanitization");
+    }
+
+    let mut meta = read_meta(source)
+        .await?
+        .context("could not read workspace metadata — is this a valid buona workspace?")?;
+    let old_name = meta.name.clone();
+
+    let dir_name = source
+        .file_name()
+        .context("could not determine workspace directory name")?
+        .to_string_lossy()
+        .into_owned();
+
+    if old_name == new_name && (keep_directory || dir_name == new_name) {
+        println!();
+        println!(
+            "  {} Workspace is already named {}",
+            s.dim.apply_to("•"),
+            s.bold.apply_to(new_name)
+        );
+        println!();
+        return Ok(());
+    }
+
+    let parent = source
+        .parent()
+        .context("could not determine workspace parent directory")?;
+
+    // Refuse if a sibling workspace already answers to the new name
+    let mut entries = tokio::fs::read_dir(parent)
+        .await
+        .with_context(|| format!("could not read workspace directory: {}", parent.display()))?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path == *source || !entry.file_type().await?.is_dir() {
+            continue;
+        }
+        if let Some(other) = read_meta(&path).await.ok().flatten()
+            && other.name == new_name
+        {
+            bail!(
+                "a workspace named \"{new_name}\" already exists at {}",
+                path.display()
+            );
+        }
+    }
+
+    // Resolve the destination directory
+    let target = if keep_directory || dir_name == new_name {
+        source.to_path_buf()
+    } else {
+        let dest = parent.join(new_name);
+        if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
+            bail!("directory already exists: {}", dest.display());
+        }
+        dest
+    };
+
+    // Remove the stale `.code-workspace` file before regenerating it under the
+    // new name
+    if sanitize_name(&old_name) != sanitize_name(new_name) {
+        let old_ws_file = source.join(format!("{}.code-workspace", sanitize_name(&old_name)));
+        if tokio::fs::try_exists(&old_ws_file).await.unwrap_or(false) {
+            tokio::fs::remove_file(&old_ws_file)
+                .await
+                .with_context(|| {
+                    format!(
+                        "could not remove old workspace file: {}",
+                        old_ws_file.display()
+                    )
+                })?;
+        }
+    }
+
+    meta.name = new_name.to_string();
+    write_meta(source, &meta).await?;
+
+    if target != *source {
+        tokio::fs::rename(source, &target).await.with_context(|| {
+            format!(
+                "could not rename {} to {}",
+                source.display(),
+                target.display()
+            )
+        })?;
+    }
+
+    let ws_file_path = sync_workspace_file(&target, &meta).await?;
+
+    println!();
+    println!(
+        "  {} Renamed workspace {} to {}",
+        s.green.apply_to("✔"),
+        s.bold.apply_to(&old_name),
+        s.bold.apply_to(new_name)
+    );
+    println!("  {}  {}", s.dim.apply_to("Location:"), target.display());
+    println!(
+        "  {} Synced {}",
+        s.dim.apply_to("→"),
+        ws_file_path.display()
     );
     println!();
 
@@ -1120,6 +1250,139 @@ mod tests {
         };
         let cfg = config::BuonaConfig::default();
         assert_eq!(resolve_git_tracking(&meta, &cfg), GitTracking::Package);
+    }
+
+    // ── rename tests ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn rename_updates_meta_directory_and_workspace_file() {
+        let root = TempDir::new().unwrap();
+        let ws = root.path().join("AI-115");
+        setup_workspace(&ws, "AI-115").await;
+        std::fs::create_dir_all(ws.join("src").join("pkg-a")).unwrap();
+
+        // Generate the original workspace file so rename has something to clean up
+        let meta = read_meta(&ws).await.unwrap().unwrap();
+        let old_ws_file = sync_workspace_file(&ws, &meta).await.unwrap();
+        assert!(old_ws_file.exists());
+
+        rename_workspace_at(&ws, "CET-2670", false).await.unwrap();
+
+        // Old directory is gone, new one exists
+        assert!(!ws.exists());
+        let new_ws = root.path().join("CET-2670");
+        assert!(new_ws.is_dir());
+
+        // Metadata carries the new name
+        let meta = read_meta(&new_ws).await.unwrap().unwrap();
+        assert_eq!(meta.name, "CET-2670");
+
+        // Old workspace file removed, new one generated
+        assert!(!new_ws.join("AI-115.code-workspace").exists());
+        let new_ws_file = new_ws.join("CET-2670.code-workspace");
+        assert!(new_ws_file.exists());
+        let contents = std::fs::read_to_string(&new_ws_file).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(parsed["folders"][0]["path"], "src/pkg-a");
+
+        // Packages survived the move
+        assert!(new_ws.join("src").join("pkg-a").is_dir());
+    }
+
+    #[tokio::test]
+    async fn rename_keep_directory_only_updates_meta() {
+        let root = TempDir::new().unwrap();
+        let ws = root.path().join("ai-dir");
+        setup_workspace(&ws, "AI-115").await;
+
+        rename_workspace_at(&ws, "CET-2670", true).await.unwrap();
+
+        // Directory unchanged, metadata renamed
+        assert!(ws.is_dir());
+        let meta = read_meta(&ws).await.unwrap().unwrap();
+        assert_eq!(meta.name, "CET-2670");
+        assert!(ws.join("CET-2670.code-workspace").exists());
+    }
+
+    #[tokio::test]
+    async fn rename_preserves_git_tracking_override() {
+        let root = TempDir::new().unwrap();
+        let ws = root.path().join("tracked");
+        setup_workspace_with_tracking(&ws, "tracked", Some(GitTracking::Workspace)).await;
+
+        rename_workspace_at(&ws, "renamed", false).await.unwrap();
+
+        let meta = read_meta(&root.path().join("renamed"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(meta.git_tracking, Some(GitTracking::Workspace));
+    }
+
+    #[tokio::test]
+    async fn rename_fails_when_destination_directory_exists() {
+        let root = TempDir::new().unwrap();
+        let ws = root.path().join("alpha");
+        setup_workspace(&ws, "alpha").await;
+        std::fs::create_dir_all(root.path().join("taken")).unwrap();
+
+        let result = rename_workspace_at(&ws, "taken", false).await;
+        assert!(result.is_err());
+
+        // Source untouched
+        assert_eq!(read_meta(&ws).await.unwrap().unwrap().name, "alpha");
+    }
+
+    #[tokio::test]
+    async fn rename_fails_when_sibling_workspace_has_name() {
+        let root = TempDir::new().unwrap();
+        let ws = root.path().join("alpha");
+        setup_workspace(&ws, "alpha").await;
+        // Sibling whose metadata name (not directory name) collides
+        let sibling = root.path().join("other-dir");
+        setup_workspace(&sibling, "beta").await;
+
+        let result = rename_workspace_at(&ws, "beta", false).await;
+        assert!(result.is_err());
+        assert_eq!(read_meta(&ws).await.unwrap().unwrap().name, "alpha");
+    }
+
+    #[tokio::test]
+    async fn rename_rejects_invalid_names() {
+        let root = TempDir::new().unwrap();
+        let ws = root.path().join("alpha");
+        setup_workspace(&ws, "alpha").await;
+
+        for bad in ["", ".", "..", "a/b", "a\\b", "!!!"] {
+            let result = rename_workspace_at(&ws, bad, false).await;
+            assert!(result.is_err(), "expected \"{bad}\" to be rejected");
+        }
+        assert_eq!(read_meta(&ws).await.unwrap().unwrap().name, "alpha");
+    }
+
+    #[tokio::test]
+    async fn rename_noop_when_already_named() {
+        let root = TempDir::new().unwrap();
+        let ws = root.path().join("alpha");
+        setup_workspace(&ws, "alpha").await;
+
+        rename_workspace_at(&ws, "alpha", false).await.unwrap();
+        assert!(ws.is_dir());
+        assert_eq!(read_meta(&ws).await.unwrap().unwrap().name, "alpha");
+    }
+
+    #[tokio::test]
+    async fn rename_moves_directory_when_meta_name_matches_but_dir_differs() {
+        let root = TempDir::new().unwrap();
+        let ws = root.path().join("old-dir");
+        setup_workspace(&ws, "CET-2670").await;
+
+        rename_workspace_at(&ws, "CET-2670", false).await.unwrap();
+
+        assert!(!ws.exists());
+        let new_ws = root.path().join("CET-2670");
+        assert!(new_ws.is_dir());
+        assert_eq!(read_meta(&new_ws).await.unwrap().unwrap().name, "CET-2670");
     }
 
     // path parsing/value parsing is tested in `path_value` unit tests.

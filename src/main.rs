@@ -213,6 +213,19 @@ enum WorkspaceCommands {
         force: bool,
     },
 
+    /// Rename a workspace (updates metadata and the directory name)
+    Rename {
+        /// Name or directory of the workspace to rename
+        workspace: String,
+
+        /// New name for the workspace
+        new_name: String,
+
+        /// Only update the metadata name; keep the directory name unchanged
+        #[arg(long)]
+        keep_directory: bool,
+    },
+
     /// Add packages to a workspace
     Add {
         /// Package specifier(s): name, org/name, or a full git URL
@@ -448,6 +461,13 @@ async fn main() -> anyhow::Result<()> {
             }
             WorkspaceCommands::Delete { workspace, force } => {
                 workspace::delete(&workspace, force).await?;
+            }
+            WorkspaceCommands::Rename {
+                workspace,
+                new_name,
+                keep_directory,
+            } => {
+                workspace::rename(&workspace, &new_name, keep_directory).await?;
             }
             WorkspaceCommands::Add {
                 packages,

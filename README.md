@@ -9,7 +9,7 @@
 
 ## Features
 
-- **Workspace management** — Create, list, inspect, and delete workspaces.
+- **Workspace management** — Create, list, inspect, rename, and delete workspaces.
 - **Package management** — Add and remove packages (git repositories) within workspaces.
 - **Automatic workspace file sync** — The `.code-workspace` file is automatically regenerated whenever packages are added, removed, or a workspace is created — no manual sync step needed.
 - **Sync & pull** — Pull the latest changes for every package in a workspace with a single command.
@@ -95,7 +95,19 @@ buona workspace create my-project --name "My Project"
 buona workspace list
 ```
 
-### 4. Add packages to a workspace
+### 4. Rename a workspace
+
+```sh
+buona workspace rename AI-115 CET-2670
+```
+
+Renames the workspace directory and updates the name in `buona.workspace.json`, keeping the registry metadata intact. The `.code-workspace` file is regenerated under the new name. Use `--keep-directory` to update only the metadata name and leave the directory as-is:
+
+```sh
+buona workspace rename AI-115 CET-2670 --keep-directory
+```
+
+### 5. Add packages to a workspace
 
 From inside a workspace directory, add one or more packages:
 
@@ -123,7 +135,7 @@ You can also target a workspace by name instead of being inside it:
 buona ws add -p my-library --workspace my-project
 ```
 
-### 5. Remove packages from a workspace
+### 6. Remove packages from a workspace
 
 ```sh
 # Remove a single package
@@ -141,7 +153,7 @@ buona ws remove -p toolkit --force
 
 This removes the package directory from `src/` and updates `buona.workspace.json`. The `.code-workspace` file is automatically updated.
 
-### 6. Sync packages
+### 7. Sync packages
 
 Pull the latest changes for every package in the workspace and regenerate the `.code-workspace` file:
 
@@ -163,7 +175,7 @@ buona ws sync -p toolkit --fetch
 
 This runs `git pull` (or `git fetch` with `--fetch`) in each package directory under `src/` and reports results. When `-p` is omitted, all tracked packages are synced.
 
-### 7. View workspace details
+### 8. View workspace details
 
 ```sh
 buona ws info
@@ -177,7 +189,7 @@ buona ws info --json
 
 Shows detailed information about a workspace: its name, directory, `.code-workspace` file status, and all tracked packages with their clone URLs and on-disk status.
 
-### 8. Open a workspace in your editor
+### 9. Open a workspace in your editor
 
 ```sh
 buona ws open
@@ -507,6 +519,7 @@ Commands:
   list    List all workspaces in the configured directory
   create  Create a new workspace
   delete  Delete a workspace
+  rename  Rename a workspace (updates metadata and the directory name)
   add     Add packages to a workspace
   adopt   Adopt an existing local directory into the workspace
   remove  Remove packages from a workspace
@@ -531,6 +544,14 @@ buona workspace delete <WORKSPACE> [--force]
 ```
 
 Deletes a workspace and all of its contents. Prompts for confirmation unless `--force` is passed.
+
+#### `buona workspace rename`
+
+```
+buona workspace rename <WORKSPACE> <NEW_NAME> [--keep-directory]
+```
+
+Renames a workspace. Updates the name in `buona.workspace.json`, renames the workspace directory to match, and regenerates the `.code-workspace` file under the new name. Pass `--keep-directory` to update only the metadata name and leave the directory name unchanged. Fails if another workspace or directory already uses the new name.
 
 #### `buona workspace add`
 
