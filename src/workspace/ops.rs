@@ -351,7 +351,10 @@ pub(crate) async fn rename(old_name: &str, new_name: &str) -> Result<()> {
     // Check if new_name is already taken as a directory name
     let new_path = workspace_dir.join(new_name);
     if new_path.exists() {
-        bail!("a workspace with directory name \"{}\" already exists", new_name);
+        bail!(
+            "a workspace with directory name \"{}\" already exists",
+            new_name
+        );
     }
 
     // Rename the directory
@@ -1251,9 +1254,7 @@ mod tests {
         assert_eq!(meta.name, "old-name");
 
         // Rename the directory
-        tokio::fs::rename(&old_path, &new_path)
-            .await
-            .unwrap();
+        tokio::fs::rename(&old_path, &new_path).await.unwrap();
 
         // Update metadata
         let mut new_meta = meta;
