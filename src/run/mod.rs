@@ -7,6 +7,7 @@ mod error;
 mod executor;
 mod format;
 mod hooks;
+mod init;
 mod ops;
 mod output;
 mod planner;
@@ -16,5 +17,6 @@ mod targets;
 mod types;
 
 pub(crate) use error::RunError;
+pub(crate) use init::{InitOptions, init};
 pub(crate) use ops::{RunOptions, detect, execute};
 pub(crate) use types::{BuildSystem, FailPolicy};

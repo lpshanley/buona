@@ -20,6 +20,7 @@
 - **Universal build commands** — Run standardized commands (`build`, `test`, `lint`, etc.) across any project via `buona run`.
 - **Lifecycle hooks** — Configure `pre<command>` and `post<command>` hooks in `buona.json` or as executable scripts.
 - **Target configuration** — Fine-tune build system and commands via `buona.json` per execution target (workspace root or package).
+- **Package init** — Scaffold a `buona.json` in any project with `buona init`.
 
 ## Installation
 
@@ -219,15 +220,28 @@ buona ws adopt ~/projects/my-library --copy
 buona ws adopt ~/projects/my-library --name custom-name
 ```
 
-### 10. Detect build system
+### 10. Initialize package config
+
+```sh
+buona init
+```
+
+Creates a `buona.json` in the current directory. Auto-detects the build system when possible and writes it as `"system"`. Use `--system <name>` to set it explicitly, or `--force` to overwrite an existing file. Outside a workspace, this file also marks the package root for nested `buona run` / `buona detect` (walk-up resolution).
+
+```sh
+buona init --system npm
+buona init --force
+```
+
+### 11. Detect build system
 
 ```sh
 buona detect
 ```
 
-Prints the auto-detected build system for the closest context (package if inside `src/<pkg>`, otherwise workspace root).
+Prints the auto-detected build system for the closest context (package if inside `src/<pkg>`, otherwise workspace root). Outside a workspace, walks up for the nearest `buona.json` and detects there (falls back to the current directory if none is found).
 
-You can also target specific locations:
+You can also target specific locations (workspace only):
 
 ```sh
 # detect only at workspace root
@@ -240,7 +254,7 @@ buona detect -t root -t api -t web
 buona detect -r
 ```
 
-### 11. Run build commands
+### 12. Run build commands
 
 ```sh
 buona run build
@@ -258,7 +272,7 @@ Buona provides universal build commands that work consistently across all your p
 buona detect
 ```
 
-Prints the auto-detected build system for the closest context (package if inside `src/<pkg>`, otherwise workspace root), including all detected marker files. This helps you verify that buona correctly identifies your project type.
+Prints the auto-detected build system for the closest context (package if inside `src/<pkg>`, otherwise workspace root), including all detected marker files. Outside a workspace, walks up for the nearest `buona.json` and detects there (falls back to the current directory if none is found). This helps you verify that buona correctly identifies your project type.
 
 Example output:
 ```
@@ -274,7 +288,9 @@ Example output:
 buona run <COMMAND> [ARGS...]
 ```
 
-Executes a build command in the closest context by default (package if inside `src/<pkg>`, otherwise workspace root). Buona automatically detects the build system and maps standard commands to the appropriate tool invocation.
+Executes a build command in the closest context by default (package if inside `src/<pkg>`, otherwise workspace root). Outside a workspace, walks up for the nearest `buona.json` and runs there (falls back to the current directory if none is found) using the same detection and hook rules — no workspace required. Use `buona init` to create that marker. `--target` / `-t` and `--recursive` / `-r` still require a workspace.
+
+Buona automatically detects the build system and maps standard commands to the appropriate tool invocation.
 
 **Standard commands** (mapped across all build systems):
 | Command | Description |

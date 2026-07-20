@@ -7,8 +7,6 @@ use std::fmt;
 /// Each variant has a specific exit code to allow scripting and CI integration.
 #[derive(Debug)]
 pub(crate) enum RunError {
-    /// Not inside a buona workspace (exit 64).
-    NotInWorkspace(String),
     /// Could not determine which package the user is in (exit 65).
     NoPackageResolved(String),
     /// buona.json is malformed or has conflicting settings (exit 68).
@@ -28,7 +26,6 @@ impl RunError {
     /// Returns the exit code for this error.
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
-            RunError::NotInWorkspace(_) => 64,
             RunError::NoPackageResolved(_) => 65,
             RunError::ConfigError(_) => 68,
             RunError::AmbiguousHook { .. } => 69,
@@ -41,7 +38,6 @@ impl RunError {
 impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RunError::NotInWorkspace(msg) => write!(f, "{msg}"),
             RunError::NoPackageResolved(msg) => write!(f, "{msg}"),
             RunError::ConfigError(msg) => write!(f, "config error: {msg}"),
             RunError::AmbiguousHook {
@@ -75,7 +71,6 @@ mod tests {
 
     #[test]
     fn exit_codes_are_correct() {
-        assert_eq!(RunError::NotInWorkspace(String::new()).exit_code(), 64);
         assert_eq!(RunError::NoPackageResolved(String::new()).exit_code(), 65);
         assert_eq!(RunError::ConfigError(String::new()).exit_code(), 68);
     }

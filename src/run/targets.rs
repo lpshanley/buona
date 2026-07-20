@@ -6,6 +6,9 @@ use crate::workspace;
 
 use super::error::RunError;
 
+/// Marker file that opts a directory into standalone package-root resolution.
+const PACKAGE_CONFIG_FILE: &str = "buona.json";
+
 #[derive(Debug, Clone)]
 pub(super) struct ExecutionTarget {
     pub(super) name: String,
@@ -19,6 +22,56 @@ impl ExecutionTarget {
             "root".to_string()
         } else {
             self.name.clone()
+        }
+    }
+}
+
+/// Build a single-target execution context for a directory outside a workspace.
+///
+/// The target directory is `dir` itself; the label is the directory basename.
+pub(super) fn local_target(dir: &Path) -> ExecutionTarget {
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| ".".to_string());
+
+    ExecutionTarget {
+        name,
+        dir: dir.to_path_buf(),
+        is_workspace_root: false,
+    }
+}
+
+/// Resolve the standalone execution target for `cwd`.
+///
+/// Walks up from `cwd` looking for `buona.json`. The first ancestor that
+/// contains one becomes the package root. If none is found, falls back to
+/// `cwd` itself (marker-only detection, no parent scan).
+pub(super) async fn resolve_local_target(cwd: &Path) -> Result<ExecutionTarget, RunError> {
+    let root = find_standalone_package_root(cwd).await?;
+    Ok(local_target(&root))
+}
+
+/// Walk up from `start` for a `buona.json`. Returns that directory, or `start`
+/// when no ancestor has the file.
+async fn find_standalone_package_root(start: &Path) -> Result<PathBuf, RunError> {
+    let mut dir = start.to_path_buf();
+    loop {
+        let marker = dir.join(PACKAGE_CONFIG_FILE);
+        match tokio::fs::try_exists(&marker).await {
+            Ok(true) => return Ok(dir),
+            Ok(false) => {}
+            Err(e) => {
+                return Err(RunError::ConfigError(format!(
+                    "could not check for {PACKAGE_CONFIG_FILE} in {}: {e}",
+                    dir.display()
+                )));
+            }
+        }
+
+        if !dir.pop() {
+            return Ok(start.to_path_buf());
         }
     }
 }
@@ -149,6 +202,59 @@ mod tests {
         )
         .unwrap();
         ws_dir.join("src").join(pkg_name)
+    }
+
+    #[test]
+    fn local_target_uses_cwd_basename() {
+        let dir = TempDir::new().unwrap();
+        let project = dir.path().join("my-app");
+        fs::create_dir_all(&project).unwrap();
+
+        let target = local_target(&project);
+        assert_eq!(target.name, "my-app");
+        assert_eq!(target.dir, project);
+        assert!(!target.is_workspace_root);
+        assert_eq!(target.label(), "my-app");
+    }
+
+    #[tokio::test]
+    async fn resolve_local_target_falls_back_to_cwd_without_buona_json() {
+        let dir = TempDir::new().unwrap();
+        let nested = dir.path().join("src").join("components");
+        fs::create_dir_all(&nested).unwrap();
+
+        let target = resolve_local_target(&nested).await.unwrap();
+        assert_eq!(target.dir, nested);
+        assert_eq!(target.label(), "components");
+    }
+
+    #[tokio::test]
+    async fn resolve_local_target_walks_up_to_buona_json() {
+        let dir = TempDir::new().unwrap();
+        let project = dir.path().join("my-app");
+        let nested = project.join("src").join("components");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(project.join("buona.json"), "{}\n").unwrap();
+        fs::write(project.join("package.json"), "{}\n").unwrap();
+
+        let target = resolve_local_target(&nested).await.unwrap();
+        assert_eq!(target.dir, project);
+        assert_eq!(target.label(), "my-app");
+    }
+
+    #[tokio::test]
+    async fn resolve_local_target_uses_nearest_buona_json() {
+        let dir = TempDir::new().unwrap();
+        let outer = dir.path().join("monorepo");
+        let inner = outer.join("packages").join("web");
+        let nested = inner.join("src");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(outer.join("buona.json"), "{\"system\":\"npm\"}\n").unwrap();
+        fs::write(inner.join("buona.json"), "{\"system\":\"pnpm\"}\n").unwrap();
+
+        let target = resolve_local_target(&nested).await.unwrap();
+        assert_eq!(target.dir, inner);
+        assert_eq!(target.label(), "web");
     }
 
     #[test]

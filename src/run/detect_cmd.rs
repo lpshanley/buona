@@ -8,8 +8,8 @@ use crate::styles::Styles;
 
 use super::detect::detect_all_systems;
 use super::error::RunError;
-use super::ops::require_workspace_root;
-use super::targets::resolve_targets;
+use super::ops::{find_optional_workspace_root, require_workspace_for_multi_target};
+use super::targets::{resolve_local_target, resolve_targets};
 
 /// Print the auto-detected build system and all marker files found.
 pub(super) async fn detect(targets: Vec<String>, recursive: bool) -> Result<()> {
@@ -23,9 +23,13 @@ pub(super) async fn detect(targets: Vec<String>, recursive: bool) -> Result<()> 
     }
 
     let cwd = env::current_dir().context("could not determine current directory")?;
-    let ws_root = require_workspace_root(&cwd).await?;
+    let ws_root = find_optional_workspace_root(&cwd).await?;
+    require_workspace_for_multi_target(ws_root.is_some(), recursive, &targets)?;
 
-    let detect_targets = resolve_targets(&cwd, &ws_root, &targets, recursive).await?;
+    let detect_targets = match ws_root {
+        Some(ref root) => resolve_targets(&cwd, root, &targets, recursive).await?,
+        None => vec![resolve_local_target(&cwd).await?],
+    };
 
     println!();
     for target in detect_targets {

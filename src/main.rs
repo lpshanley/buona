@@ -53,6 +53,17 @@ enum Commands {
         recursive: bool,
     },
 
+    /// Create a `buona.json` in the current directory
+    Init {
+        /// Force a specific build system (skips auto-detection)
+        #[arg(long, value_enum)]
+        system: Option<run::BuildSystem>,
+
+        /// Overwrite an existing `buona.json`
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Run a command in the current context or explicit target(s)
     Run {
         /// Force a specific build system (overrides auto-detection and the
@@ -411,7 +422,7 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             // RunError carries a specific exit code (forwarded child exit
-            // codes, or the documented 64/65/68/69 config errors).
+            // codes, or the documented 65/68/69 config errors).
             if let Some(run_err) = e.downcast_ref::<run::RunError>() {
                 eprintln!("error: {run_err}");
                 return ExitCode::from(run_err.exit_code().clamp(1, 255) as u8);
@@ -567,6 +578,9 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
         },
         Commands::Detect { targets, recursive } => {
             run::detect(targets, recursive).await?;
+        }
+        Commands::Init { system, force } => {
+            run::init(run::InitOptions { system, force }).await?;
         }
         Commands::Run {
             system,
