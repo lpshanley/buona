@@ -34,13 +34,13 @@ pub(super) async fn sync_workspace(
 
     let tracking = meta.effective_tracking(cfg);
 
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} Syncing {}",
         s.bold.apply_to("🔄"),
         s.bold.apply_to(&meta.name)
     );
-    println!("  {}", s.dim.apply_to("───────────────────────────"));
+    crate::textln!("  {}", s.dim.apply_to("───────────────────────────"));
 
     if tracking == GitTracking::Workspace {
         sync_workspace_level(ws_root, packages, fetch_only, &s).await?;
@@ -55,12 +55,12 @@ pub(super) async fn sync_workspace(
         .file_name()
         .unwrap_or_default()
         .to_string_lossy();
-    println!(
+    crate::textln!(
         "  {} Workspace file {}",
         s.green.apply_to("✔"),
         s.bold.apply_to(filename.as_ref())
     );
-    println!();
+    crate::textln!();
 
     Ok(ws_file_path)
 }
@@ -73,7 +73,7 @@ async fn sync_workspace_level(
     s: &Styles,
 ) -> Result<()> {
     if !packages.is_empty() {
-        println!(
+        crate::textln!(
             "  {} Per-package filtering is not applicable in workspace-level tracking mode",
             s.dim.apply_to("⚠"),
         );
@@ -89,7 +89,7 @@ async fn sync_workspace_level(
 
     let git_op = if fetch_only { "Fetching" } else { "Pulling" };
 
-    println!(
+    crate::textln!(
         "  {} {} workspace repository ...",
         s.dim.apply_to("→"),
         git_op,
@@ -99,7 +99,7 @@ async fn sync_workspace_level(
 
     if output.status.success() {
         let summary = git_ops::summarize_sync_stdout(&output, fetch_only);
-        println!(
+        crate::textln!(
             "  {} {} — {}",
             s.green.apply_to("✔"),
             s.bold.apply_to("workspace"),
@@ -141,7 +141,7 @@ async fn sync_package_level(
     };
 
     if targets.is_empty() {
-        println!("  {}  No packages to sync", s.dim.apply_to("—"));
+        crate::textln!("  {}  No packages to sync", s.dim.apply_to("—"));
     }
 
     let mut pulled: Vec<String> = Vec::new();
@@ -153,12 +153,12 @@ async fn sync_package_level(
         if !pkg_dir.exists() {
             let msg = format!("directory not found: {}", pkg_dir.display());
             failures.push((pkg_name.to_string(), msg.clone()));
-            println!("  {} {} — {}", s.red.apply_to("✘"), pkg_name, msg);
+            crate::textln!("  {} {} — {}", s.red.apply_to("✘"), pkg_name, msg);
             continue;
         }
 
         let git_op = if fetch_only { "Fetching" } else { "Pulling" };
-        println!(
+        crate::textln!(
             "  {} {} {} ...",
             s.dim.apply_to("→"),
             git_op,
@@ -169,7 +169,7 @@ async fn sync_package_level(
 
         if output.status.success() {
             let summary = git_ops::summarize_sync_stdout(&output, fetch_only);
-            println!(
+            crate::textln!(
                 "  {} {} — {}",
                 s.green.apply_to("✔"),
                 s.bold.apply_to(pkg_name),
@@ -180,21 +180,21 @@ async fn sync_package_level(
             let stderr = String::from_utf8_lossy(&output.stderr);
             let msg = stderr.trim().to_string();
             failures.push((pkg_name.to_string(), msg.clone()));
-            println!("  {} {} — {}", s.red.apply_to("✘"), pkg_name, msg);
+            crate::textln!("  {} {} — {}", s.red.apply_to("✘"), pkg_name, msg);
         }
     }
 
     // Print package-level summary
-    println!();
+    crate::textln!();
     if !failures.is_empty() {
-        println!(
+        crate::textln!(
             "  {} Summary: {} succeeded, {} failed",
             s.dim.apply_to("→"),
             pulled.len(),
             failures.len()
         );
     } else if !targets.is_empty() {
-        println!(
+        crate::textln!(
             "  {} {} package{} synced",
             s.green.apply_to("✔"),
             pulled.len(),

@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../schemas/config.schema.json",
+  "workspace_dir": "~/workspace",
+  "ide": "cursor",
+  "git": {
+    "host": "github.example.com",
+    "organization": "example",
+    "protocol": "https",
+    "tracking": "package"
+  },
+  "default_packages": ["example/core"],
+  "workspace_template": "~/.config/buona/templates/default"
+}

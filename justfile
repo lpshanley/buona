@@ -28,6 +28,15 @@ ci:
     cargo fmt --all -- --check
     cargo clippy --all-targets --all-features -- -D warnings
     cargo test --all-targets --all-features
+    just docs-check
+
+# Refresh the checked-in top-level CLI help reference
+generate-docs:
+    cargo run --quiet -- --help > docs/cli-reference.txt
+
+# Verify schemas, fixtures, JSON contracts, and generated CLI help
+docs-check:
+    cargo test --test docs_contract --test agent_cli
 
 # Run pre-release checks (formatting + linting + tests)
 pre-release:

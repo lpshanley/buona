@@ -29,13 +29,13 @@ pub(super) async fn add_packages_to_workspace(
     let tracking = meta.effective_tracking(cfg);
     let src_dir = ws_root.join("src");
 
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} Adding packages to {}",
         s.bold.apply_to("📦"),
         s.bold.apply_to(&meta.name)
     );
-    println!("  {}", s.dim.apply_to("───────────────────────────"));
+    crate::textln!("  {}", s.dim.apply_to("───────────────────────────"));
 
     let mut successes: Vec<String> = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
@@ -45,7 +45,7 @@ pub(super) async fn add_packages_to_workspace(
             Ok(r) => r,
             Err(e) => {
                 failures.push((spec.clone(), format!("{e}")));
-                println!("  {} {} — {}", s.red.apply_to("✘"), spec, e);
+                crate::textln!("  {} {} — {}", s.red.apply_to("✘"), spec, e);
                 continue;
             }
         };
@@ -54,7 +54,7 @@ pub(super) async fn add_packages_to_workspace(
         if dest.exists() {
             let msg = format!("directory already exists: {}", dest.display());
             failures.push((spec.clone(), msg.clone()));
-            println!("  {} {} — {}", s.red.apply_to("✘"), spec, msg);
+            crate::textln!("  {} {} — {}", s.red.apply_to("✘"), spec, msg);
             continue;
         }
 
@@ -62,7 +62,7 @@ pub(super) async fn add_packages_to_workspace(
             .await
             .with_context(|| format!("could not create src directory: {}", src_dir.display()))?;
 
-        println!(
+        crate::textln!(
             "  {} Cloning {} ...",
             s.dim.apply_to("→"),
             s.cyan.apply_to(&resolved.name)
@@ -85,7 +85,7 @@ pub(super) async fn add_packages_to_workspace(
                 }
             }
 
-            println!(
+            crate::textln!(
                 "  {} {}",
                 s.green.apply_to("✔"),
                 s.bold.apply_to(&resolved.name)
@@ -95,7 +95,7 @@ pub(super) async fn add_packages_to_workspace(
             let stderr = String::from_utf8_lossy(&output.stderr);
             let msg = stderr.trim().to_string();
             failures.push((spec.clone(), msg.clone()));
-            println!("  {} {} — {}", s.red.apply_to("✘"), spec, msg);
+            crate::textln!("  {} {} — {}", s.red.apply_to("✘"), spec, msg);
         }
     }
 
@@ -103,23 +103,23 @@ pub(super) async fn add_packages_to_workspace(
         sync_workspace_file(ws_root, &meta).await?;
     }
 
-    println!();
+    crate::textln!();
     if !failures.is_empty() {
-        println!(
+        crate::textln!(
             "  {} Summary: {} succeeded, {} failed",
             s.dim.apply_to("→"),
             successes.len(),
             failures.len()
         );
     } else {
-        println!(
+        crate::textln!(
             "  {} {} package{} added",
             s.green.apply_to("✔"),
             successes.len(),
             if successes.len() == 1 { "" } else { "s" }
         );
     }
-    println!();
+    crate::textln!();
 
     if !failures.is_empty() && successes.is_empty() {
         bail!("all packages failed to add");

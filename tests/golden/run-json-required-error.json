@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "configuration",
+    "exit_code": 68,
+    "hint": "Check buona.json and the command arguments.",
+    "message": "config error: JSON output for `buona run` requires --dry-run because child processes own stdout",
+    "target": null
+  },
+  "ok": false
+}

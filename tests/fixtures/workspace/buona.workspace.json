@@ -1,0 +1,6 @@
+{
+  "$schema": "../../../schemas/buona.workspace.schema.json",
+  "name": "agent-fixture",
+  "git_tracking": "package",
+  "mount_root": true
+}

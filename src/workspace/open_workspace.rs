@@ -25,28 +25,31 @@ pub(super) async fn open_workspace_at(ws_root: &Path, cfg: &BuonaConfig) -> Resu
 
     let ide_cmd = cfg.ide.command();
 
-    println!(
+    crate::textln!(
         "  {} Opening in {} ...",
         s.dim.apply_to("→"),
         s.bold.apply_to(cfg.ide.to_string())
     );
 
-    let status = Command::new(ide_cmd)
-        .arg(&ws_file_path)
-        .status()
-        .await
-        .with_context(|| {
-            format!(
-                "failed to launch {ide_cmd} — is {} installed and on your PATH?",
-                cfg.ide
-            )
-        })?;
+    let mut command = Command::new(ide_cmd);
+    command.arg(&ws_file_path);
+    if crate::output::is_json() {
+        command
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
+    let status = command.status().await.with_context(|| {
+        format!(
+            "failed to launch {ide_cmd} — is {} installed and on your PATH?",
+            cfg.ide
+        )
+    })?;
 
     if !status.success() {
         bail!("{ide_cmd} exited with {status}");
     }
 
-    println!(
+    crate::textln!(
         "  {} Opened {}",
         s.green.apply_to("✔"),
         s.bold.apply_to(
@@ -56,7 +59,7 @@ pub(super) async fn open_workspace_at(ws_root: &Path, cfg: &BuonaConfig) -> Resu
                 .to_string_lossy()
         )
     );
-    println!();
+    crate::textln!();
 
     Ok(())
 }

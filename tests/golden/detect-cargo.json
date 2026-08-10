@@ -1,0 +1,18 @@
+{
+  "targets": [
+    {
+      "detections": [
+        {
+          "marker": "Cargo.toml",
+          "system": "cargo"
+        }
+      ],
+      "target": {
+        "directory": "$FIXTURE",
+        "kind": "package",
+        "name": "cargo"
+      },
+      "winner": "cargo"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../schemas/buona.schema.json",
+  "system": "cargo",
+  "commands": {
+    "test": {
+      "exec": ["cargo", "test", "--all-targets"]
+    }
+  },
+  "hooksDir": ".buona/hooks",
+  "hooks": {
+    "pretest": ["cargo", "fmt", "--check"]
+  }
+}

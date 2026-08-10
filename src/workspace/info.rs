@@ -49,16 +49,16 @@ pub(super) async fn show_info(ws_root: &Path, json: bool) -> Result<()> {
     let ws_file = format!("{sanitized}.code-workspace");
     let ws_file_path = ws_root.join(&ws_file);
 
-    println!();
-    println!("  {}", s.bold.apply_to("Workspace Info"));
-    println!("  {}", s.dim.apply_to("──────────────"));
-    println!(
+    crate::textln!();
+    crate::textln!("  {}", s.bold.apply_to("Workspace Info"));
+    crate::textln!("  {}", s.dim.apply_to("──────────────"));
+    crate::textln!(
         "  {}  {}",
         s.cyan.apply_to("Name:"),
         s.bold.apply_to(&meta.name)
     );
-    println!("  {}  {}", s.cyan.apply_to("Directory:"), ws_root.display());
-    println!(
+    crate::textln!("  {}  {}", s.cyan.apply_to("Directory:"), ws_root.display());
+    crate::textln!(
         "  {}  {} {}",
         s.cyan.apply_to("Workspace file:"),
         ws_file,
@@ -68,22 +68,22 @@ pub(super) async fn show_info(ws_root: &Path, json: bool) -> Result<()> {
             s.dim.apply_to("(not generated)").to_string()
         }
     );
-    println!("  {}  {}", s.cyan.apply_to("Git tracking:"), tracking);
-    println!("  {}  {}", s.cyan.apply_to("Packages:"), pkg_names.len());
+    crate::textln!("  {}  {}", s.cyan.apply_to("Git tracking:"), tracking);
+    crate::textln!("  {}  {}", s.cyan.apply_to("Packages:"), pkg_names.len());
 
     // In workspace mode, show workspace-level git info
     if tracking == GitTracking::Workspace {
         let ws_url = detect_git_remote_url(ws_root).await;
         let ws_branch = detect_git_branch(ws_root).await;
 
-        println!();
-        println!("  {}", s.bold.apply_to("Workspace Git"));
-        println!("  {}", s.dim.apply_to("──────────────"));
+        crate::textln!();
+        crate::textln!("  {}", s.bold.apply_to("Workspace Git"));
+        crate::textln!("  {}", s.dim.apply_to("──────────────"));
         if !ws_url.is_empty() {
-            println!("  {}  {}", s.dim.apply_to("url:"), s.dim.apply_to(&ws_url));
+            crate::textln!("  {}  {}", s.dim.apply_to("url:"), s.dim.apply_to(&ws_url));
         }
         if !ws_branch.is_empty() {
-            println!(
+            crate::textln!(
                 "  {}  {}",
                 s.dim.apply_to("branch:"),
                 s.dim.apply_to(&ws_branch)
@@ -92,14 +92,14 @@ pub(super) async fn show_info(ws_root: &Path, json: bool) -> Result<()> {
     }
 
     if !pkg_names.is_empty() {
-        println!();
-        println!("  {}", s.bold.apply_to("Packages"));
-        println!("  {}", s.dim.apply_to("──────────────"));
+        crate::textln!();
+        crate::textln!("  {}", s.bold.apply_to("Packages"));
+        crate::textln!("  {}", s.dim.apply_to("──────────────"));
 
         for name in &pkg_names {
             let pkg_dir = src_dir.join(name);
 
-            println!("  {}  {}", s.cyan.apply_to("•"), s.bold.apply_to(name),);
+            crate::textln!("  {}  {}", s.cyan.apply_to("•"), s.bold.apply_to(name),);
 
             // In package mode, show per-package git info
             if tracking == GitTracking::Package {
@@ -107,17 +107,17 @@ pub(super) async fn show_info(ws_root: &Path, json: bool) -> Result<()> {
                 let branch = detect_git_branch(&pkg_dir).await;
 
                 if !url.is_empty() {
-                    println!("     {}  {}", s.dim.apply_to("url:"), s.dim.apply_to(&url));
+                    crate::textln!("     {}  {}", s.dim.apply_to("url:"), s.dim.apply_to(&url));
                 }
                 if !branch.is_empty() {
-                    println!(
+                    crate::textln!(
                         "     {}  {}",
                         s.dim.apply_to("branch:"),
                         s.dim.apply_to(&branch)
                     );
                 }
             }
-            println!(
+            crate::textln!(
                 "     {}  {}",
                 s.dim.apply_to("dir:"),
                 s.dim.apply_to(pkg_dir.display().to_string())
@@ -125,7 +125,7 @@ pub(super) async fn show_info(ws_root: &Path, json: bool) -> Result<()> {
         }
     }
 
-    println!();
+    crate::textln!();
     Ok(())
 }
 
@@ -155,8 +155,14 @@ async fn print_json(
         }));
     }
 
+    let sanitized = sanitize_name(&meta.name);
+    let workspace_file = ws_root.join(format!("{sanitized}.code-workspace"));
     let mut output = serde_json::json!({
         "name": meta.name,
+        "directory": ws_root,
+        "metadata_file": ws_root.join("buona.workspace.json"),
+        "workspace_file": workspace_file,
+        "workspace_file_exists": workspace_file.is_file(),
         "git_tracking": tracking_str,
         "packages": packages_json,
     });
@@ -176,6 +182,5 @@ async fn print_json(
         };
     }
 
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
+    crate::output::print_json(&output)
 }

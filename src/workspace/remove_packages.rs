@@ -46,9 +46,9 @@ pub(super) async fn remove_packages_from_workspace(
 
     // Report not-found packages upfront
     if !not_found.is_empty() {
-        println!();
+        crate::textln!();
         for name in &not_found {
-            println!(
+            crate::textln!(
                 "  {} Package {} not found in workspace {}",
                 s.red.apply_to("✘"),
                 s.bold.apply_to(name),
@@ -59,25 +59,29 @@ pub(super) async fn remove_packages_from_workspace(
 
     if to_remove.is_empty() {
         if not_found.is_empty() {
-            println!();
-            println!("  {} No packages specified", s.dim.apply_to("—"));
+            crate::textln!();
+            crate::textln!("  {} No packages specified", s.dim.apply_to("—"));
         }
-        println!();
+        crate::textln!();
         bail!("no matching packages to remove");
     }
 
     // Show what will be removed and confirm
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} Removing from {}",
         s.bold.apply_to("📦"),
         s.bold.apply_to(&meta.name)
     );
-    println!("  {}", s.dim.apply_to("───────────────────────────"));
+    crate::textln!("  {}", s.dim.apply_to("───────────────────────────"));
     for name in &to_remove {
-        println!("  {}  {}", s.red.apply_to("−"), name);
+        crate::textln!("  {}  {}", s.red.apply_to("−"), name);
     }
-    println!();
+    crate::textln!();
+
+    if !force && crate::output::is_non_interactive() {
+        bail!("package removal requires confirmation; re-run with --yes");
+    }
 
     if !force {
         let prompt_msg = if to_remove.len() == 1 {
@@ -101,8 +105,8 @@ pub(super) async fn remove_packages_from_workspace(
             .context("failed to read input")?;
 
         if !confirmed {
-            println!("  Aborted.");
-            println!();
+            crate::textln!("  Aborted.");
+            crate::textln!();
             return Ok(());
         }
     }
@@ -118,7 +122,7 @@ pub(super) async fn remove_packages_from_workspace(
             && let Err(e) = tokio::fs::remove_dir_all(&pkg_dir).await
         {
             dir_errors.push((name.to_string(), format!("{e}")));
-            println!(
+            crate::textln!(
                 "  {} {} — could not remove directory: {}",
                 s.red.apply_to("✘"),
                 name,
@@ -136,9 +140,9 @@ pub(super) async fn remove_packages_from_workspace(
     }
 
     // Print summary
-    println!();
+    crate::textln!();
     for name in &removed {
-        println!(
+        crate::textln!(
             "  {} Removed {}",
             s.green.apply_to("✔"),
             s.bold.apply_to(name)
@@ -146,22 +150,22 @@ pub(super) async fn remove_packages_from_workspace(
     }
 
     if !dir_errors.is_empty() {
-        println!(
+        crate::textln!(
             "  {} Summary: {} succeeded, {} failed",
             s.dim.apply_to("→"),
             removed.len(),
             dir_errors.len()
         );
     } else {
-        println!();
-        println!(
+        crate::textln!();
+        crate::textln!(
             "  {} {} package{} removed",
             s.green.apply_to("✔"),
             removed.len(),
             if removed.len() == 1 { "" } else { "s" }
         );
     }
-    println!();
+    crate::textln!();
 
     if !dir_errors.is_empty() && removed.is_empty() {
         bail!("all packages failed to remove");

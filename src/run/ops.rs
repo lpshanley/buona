@@ -83,6 +83,14 @@ fn default_jobs() -> usize {
 pub(crate) async fn execute(options: RunOptions) -> Result<()> {
     let s = Styles::default();
 
+    if crate::output::is_json() && !options.dry_run {
+        return Err(RunError::ConfigError(
+            "JSON output for `buona run` requires --dry-run because child processes own stdout"
+                .to_string(),
+        )
+        .into());
+    }
+
     let command_name = &options.command;
     let extra_args = &options.args;
     let execution = resolve_effective_execution(&options)?;
@@ -151,14 +159,31 @@ pub(crate) async fn execute(options: RunOptions) -> Result<()> {
                     .as_ref()
                     .map(|x| x.display.as_str()),
             );
+            target_plans.push(target_plan);
             continue;
         }
 
         target_plans.push(target_plan);
     }
 
-    if options.dry_run {
-        println!();
+    if options.dry_run && crate::output::is_json() {
+        let targets = target_plans
+            .iter()
+            .map(output::target_plan_json)
+            .collect::<Vec<_>>();
+        crate::output::print_json(&serde_json::json!({
+            "command": options.command,
+            "args": options.args,
+            "dry_run": true,
+            "execution": {
+                "parallel": execution.parallel,
+                "jobs": execution.jobs,
+                "fail_policy": execution.fail_policy.to_string(),
+            },
+            "targets": targets,
+        }))?;
+    } else if options.dry_run {
+        crate::textln!();
     } else {
         executor::execute_target_plans(target_plans, execution).await?;
     }

@@ -1,14 +1,69 @@
 //! Terminal rendering helpers for `buona run`.
 
+use serde_json::{Value, json};
+
 use crate::styles::Styles;
 
 use super::format::format_display;
 use super::hooks::HookResolution;
-use super::types::{ExecutionPlan, HookSource};
+use super::planner::TargetRunPlan;
+use super::types::{ExecutionPlan, HookSource, PlanKind};
+
+pub(super) fn target_plan_json(target_plan: &TargetRunPlan) -> Value {
+    let plan = &target_plan.plan;
+    json!({
+        "target": {
+            "name": target_plan.target.label(),
+            "kind": if target_plan.target.is_workspace_root { "workspace-root" } else { "package" },
+            "directory": target_plan.target.dir,
+        },
+        "plan": {
+            "system": plan.system.map(|system| system.to_string()),
+            "kind": plan_kind_label(plan.kind),
+            "program": plan.program,
+            "args": plan.args,
+            "display": plan.display,
+            "cwd": plan.cwd,
+            "skip_reason": plan.skip_reason.map(|reason| reason.label()),
+        },
+        "hooks": {
+            "pre": target_plan.hooks.pre_hook.as_ref().map(hook_json),
+            "post": target_plan.hooks.post_hook.as_ref().map(hook_json),
+            "warnings": target_plan.hooks.warnings.iter().map(|warning| json!({
+                "hook": warning.hook_name,
+                "message": warning.message,
+            })).collect::<Vec<_>>(),
+        }
+    })
+}
+
+fn hook_json(hook: &super::types::ResolvedHook) -> Value {
+    json!({
+        "name": hook.name,
+        "phase": hook.phase.to_string(),
+        "source": match hook.source {
+            HookSource::Explicit => "explicit",
+            HookSource::Convention => "convention",
+        },
+        "program": hook.program,
+        "args": hook.args,
+        "cwd": hook.cwd,
+        "display": hook.display,
+    })
+}
+
+fn plan_kind_label(kind: PlanKind) -> &'static str {
+    match kind {
+        PlanKind::Standard => "standard",
+        PlanKind::Proxy => "proxy",
+        PlanKind::ExecOverride => "exec-override",
+        PlanKind::Noop => "noop",
+    }
+}
 
 pub(super) fn print_plan_info(s: &Styles, pkg_name: &str, plan: &ExecutionPlan, verbose: bool) {
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} {} in {}",
         s.dim.apply_to("→"),
         s.bold.apply_to(&plan.display),
@@ -17,35 +72,35 @@ pub(super) fn print_plan_info(s: &Styles, pkg_name: &str, plan: &ExecutionPlan, 
 
     if verbose {
         match plan.system {
-            Some(system) => println!("  {}  system: {}", s.dim.apply_to("│"), system),
-            None => println!(
+            Some(system) => crate::textln!("  {}  system: {}", s.dim.apply_to("│"), system),
+            None => crate::textln!(
                 "  {}  system: {}",
                 s.dim.apply_to("│"),
                 s.dim.apply_to("none")
             ),
         }
-        println!("  {}  kind: {:?}", s.dim.apply_to("│"), plan.kind);
+        crate::textln!("  {}  kind: {:?}", s.dim.apply_to("│"), plan.kind);
         if let Some(reason) = plan.skip_reason {
-            println!(
+            crate::textln!(
                 "  {}  skipped: {}",
                 s.dim.apply_to("│"),
                 s.dim.apply_to(reason.label()),
             );
         }
-        println!("  {}  cwd: {}", s.dim.apply_to("│"), plan.cwd.display());
+        crate::textln!("  {}  cwd: {}", s.dim.apply_to("│"), plan.cwd.display());
     }
-    println!();
+    crate::textln!();
 }
 
 pub(super) fn print_recursive_graph_header(s: &Styles) {
-    println!();
-    println!("  {}", s.bold.apply_to("dry-run execution graph"));
-    println!("  {}", s.dim.apply_to("──────────────────────"));
+    crate::textln!();
+    crate::textln!("  {}", s.bold.apply_to("dry-run execution graph"));
+    crate::textln!("  {}", s.dim.apply_to("──────────────────────"));
 }
 
 pub(super) fn print_hook_warnings(s: &Styles, resolution: &HookResolution) {
     for warning in &resolution.warnings {
-        eprintln!(
+        crate::text_errln!(
             "  {} hook \"{}\": {}",
             s.yellow.apply_to("warning:"),
             warning.hook_name,
@@ -59,13 +114,13 @@ pub(super) fn print_hook_info(s: &Styles, resolution: &HookResolution) {
     if !has_hooks {
         return;
     }
-    println!("  {}  hooks:", s.dim.apply_to("│"));
+    crate::textln!("  {}  hooks:", s.dim.apply_to("│"));
     if let Some(ref hook) = resolution.pre_hook {
         let source_label = match hook.source {
             HookSource::Explicit => "explicit",
             HookSource::Convention => "convention",
         };
-        println!(
+        crate::textln!(
             "  {}    {}: {} ({})",
             s.dim.apply_to("│"),
             hook.name,
@@ -78,7 +133,7 @@ pub(super) fn print_hook_info(s: &Styles, resolution: &HookResolution) {
             HookSource::Explicit => "explicit",
             HookSource::Convention => "convention",
         };
-        println!(
+        crate::textln!(
             "  {}    {}: {} ({})",
             s.dim.apply_to("│"),
             hook.name,
@@ -86,18 +141,18 @@ pub(super) fn print_hook_info(s: &Styles, resolution: &HookResolution) {
             s.dim.apply_to(source_label),
         );
     }
-    println!();
+    crate::textln!();
 }
 
 pub(super) fn print_dry_run_stage(s: &Styles, stage_name: &str, command: Option<&str>) {
     match command {
-        Some(cmd) => println!(
+        Some(cmd) => crate::textln!(
             "  {} {} {}",
             s.dim.apply_to("·"),
             s.bold.apply_to(stage_name),
             cmd,
         ),
-        None => println!(
+        None => crate::textln!(
             "  {} {} {}",
             s.dim.apply_to("·"),
             s.bold.apply_to(stage_name),
@@ -124,7 +179,7 @@ pub(super) fn print_dry_run_command_stage(
         String::new()
     };
 
-    println!(
+    crate::textln!(
         "  {} {} {}{}",
         s.dim.apply_to("·"),
         s.bold.apply_to(stage_name),

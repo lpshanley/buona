@@ -16,8 +16,10 @@
 - **Editor integration** — Open a workspace directly in VS Code or Cursor.
 - **Global configuration** — A simple config file (`~/.config/buona/config.json`) keeps your preferences consistent across projects.
 - **Interactive setup** — A guided wizard walks you through first-time configuration.
-- **Build system detection** — Auto-detects Cargo, Go, npm, pnpm, yarn, Bun, uv, Poetry, Make, Gradle, and Maven projects.
+- **Build system detection** — Auto-detects Cargo, Go, npm, pnpm, yarn, Bun, uv, Poetry, Make, Just, Gradle, and Maven projects.
 - **Universal build commands** — Run standardized commands (`build`, `test`, `lint`, etc.) across any project via `buona run`.
+- **Agent-safe inspection** — Resolve targets, configuration, commands, and hooks without executing them via `buona inspect`.
+- **Machine-readable operation** — Use `--output json`, `--no-color`, and `--non-interactive` in agents and CI.
 - **Lifecycle hooks** — Configure `pre<command>` and `post<command>` hooks in `buona.json` or as executable scripts.
 - **Target configuration** — Fine-tune build system and commands via `buona.json` per execution target (workspace root or package).
 - **Package init** — Scaffold a `buona.json` in any project with `buona init`.
@@ -149,7 +151,7 @@ buona ws remove -p toolkit -p utils
 buona ws remove -p toolkit --workspace my-project
 
 # Skip the confirmation prompt
-buona ws remove -p toolkit --force
+buona ws remove -p toolkit --yes
 ```
 
 This removes the package directory from `src/` and updates `buona.workspace.json`. The `.code-workspace` file is automatically updated.
@@ -261,6 +263,15 @@ buona run build
 ```
 
 See the [Build System Commands](#build-system-commands) section for full details.
+
+### 13. Inspect the current context safely
+
+```sh
+buona inspect --output json
+```
+
+Reports the current workspace, selected target, packages, config sources,
+detected systems, hooks, and resolved standard commands without executing them.
 
 ## Build System Commands
 
@@ -493,13 +504,26 @@ buona run build --dry-run
 
 ## Usage
 
+```text
 Commands:
   config     View or set up the global configuration
   detect     Print the auto-detected build system for context/target(s)
+  inspect    Describe the current workspace, target, configuration, and command plans
+  init       Create a target configuration
   run        Run a command in context/target(s)
   self       Manage the buona binary itself
   workspace  Manage workspaces (alias: ws)
 ```
+
+Global options can appear before or after subcommands:
+
+- `--output text|json` — Select human-readable or machine-readable output.
+- `--no-color` — Disable Buona and child-command colors.
+- `--non-interactive` — Fail instead of prompting for terminal input.
+
+JSON mode implies non-interactive mode. See the
+[agent and automation interface](docs/agent-interface.md) for result envelopes,
+discovery workflows, and stable exit codes.
 
 ### `buona config`
 
@@ -560,10 +584,11 @@ Creates a new workspace directory with a `buona.workspace.json` metadata file.
 #### `buona workspace delete`
 
 ```
-buona workspace delete <WORKSPACE> [--force]
+buona workspace delete <WORKSPACE> [--yes]
 ```
 
-Deletes a workspace and all of its contents. Prompts for confirmation unless `--force` is passed.
+Deletes a workspace and all of its contents. Prompts for confirmation unless
+`--yes` is passed. `--force` remains a compatibility alias.
 
 #### `buona workspace rename`
 
@@ -592,10 +617,12 @@ Pass `-p` multiple times to add several packages in one command. Packages are cl
 #### `buona workspace remove`
 
 ```
-buona workspace remove -p <PACKAGE>... [--workspace <NAME>] [--force]
+buona workspace remove -p <PACKAGE>... [--workspace <NAME>] [--yes]
 ```
 
-Removes one or more packages from a workspace. This deletes the package directory from `src/` and removes the entry from `buona.workspace.json`. The `.code-workspace` file is automatically updated. Prompts for confirmation unless `--force` is passed.
+Removes one or more packages from a workspace. This deletes the package
+directory from `src/` and updates the `.code-workspace` file. Prompts for
+confirmation unless `--yes` is passed. `--force` remains a compatibility alias.
 
 #### `buona workspace sync`
 
@@ -642,7 +669,10 @@ buona ws config unset mount_root
 buona workspace info [--workspace <NAME>] [--json]
 ```
 
-Displays detailed information about a workspace, including its name, directory path, `.code-workspace` file status, and all tracked packages with their URLs and on-disk clone status. Pass `--json` to output the raw workspace metadata as JSON.
+Displays detailed information about a workspace, including its name, directory
+path, `.code-workspace` file status, and all tracked packages with their URLs
+and on-disk clone status. Pass `--json` for the enriched machine-readable
+workspace document.
 
 ### `buona self`
 
@@ -697,6 +727,8 @@ Buona stores its configuration at `~/.config/buona/config.json`. The current set
 | `git.organization` | Default organization on the git host          | *(empty)*      |
 | `git.protocol`     | Clone/push protocol (`ssh` or `https`)        | `ssh`          |
 | `git.tracking`     | Default workspace git tracking mode (`package` or `workspace`) | `package` |
+| `default_packages` | Package specifiers added to every new workspace | `[]` |
+| `workspace_template` | Optional directory copied into new workspaces | *(unset)* |
 
 Complete `~/.config/buona/config.json` template:
 
@@ -710,7 +742,9 @@ Complete `~/.config/buona/config.json` template:
     "organization": "",
     "protocol": "ssh",
     "tracking": "package"
-  }
+  },
+  "default_packages": [],
+  "workspace_template": null
 }
 ```
 
@@ -731,55 +765,15 @@ Each workspace contains a `buona.workspace.json` file:
 
 Packages are discovered from the workspace `src/` directory and from git remotes at runtime; they are not stored in `buona.workspace.json`.
 
-Like global config, unknown keys in `buona.workspace.json` are ignored on read and dropped on write.
+Like global config, unknown keys in `buona.workspace.json` may be read for
+backward compatibility and are dropped on write. The schema rejects them so
+editors and automation catch typos before Buona rewrites the file.
 
-## Development
+## Contributing
 
-### Prerequisites
-
-- [Rust](https://rustup.rs/) (stable)
-- [just](https://github.com/casey/just) (task runner)
-- [cargo-release](https://github.com/crate-ci/cargo-release) (release automation)
-
-```sh
-cargo install cargo-release
-```
-
-### Commands
-
-```sh
-# Run buona with arguments
-just run <args>
-
-# Run tests
-just test
-
-# Run the full CI check suite locally (formatting, linting, tests)
-just ci
-
-# Run pre-release checks only (formatting + linting)
-just pre-release
-
-# Example commands
-just config show
-just workspace list
-```
-
-## Releasing
-
-Releases are managed by [cargo-release](https://github.com/crate-ci/cargo-release), which handles version bumping in `Cargo.toml`, committing, tagging, and pushing. The tag push triggers CI, and on success, GitHub Actions builds and publishes binaries for Linux, Intel macOS, and Apple Silicon macOS.
-
-```sh
-# Dry-run (preview what will happen, no changes made)
-just release patch
-just release minor
-just release 0.2.0
-
-# Execute the release
-just release patch --execute
-```
-
-Releases are restricted to the `main` branch. Before bumping the version, `cargo-release` runs `just pre-release` to verify formatting and linting pass.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, verification, and release
+workflows. The [architecture guide](docs/architecture.md) maps the codebase for
+humans and coding agents.
 
 ## License
 

@@ -32,23 +32,23 @@ pub(crate) async fn update(options: UpdateOptions) -> Result<()> {
     let current_version = env!("CARGO_PKG_VERSION");
     let target = platform::current_target();
 
-    println!();
-    println!("  {} buona self update", s.bold.apply_to("⚡"),);
-    println!("  {}", s.dim.apply_to("───────────────────────────"));
-    println!(
+    crate::textln!();
+    crate::textln!("  {} buona self update", s.bold.apply_to("⚡"),);
+    crate::textln!("  {}", s.dim.apply_to("───────────────────────────"));
+    crate::textln!(
         "  {}  v{}",
         s.dim.apply_to("Current version:"),
         current_version,
     );
-    println!("  {}  {}", s.dim.apply_to("Platform:"), target,);
-    println!();
+    crate::textln!("  {}  {}", s.dim.apply_to("Platform:"), target,);
+    crate::textln!();
 
     // Determine which release to fetch
     let tag = options.version.as_ref().map(|v| normalize_tag(v));
 
     let release = match &tag {
         Some(t) => {
-            println!(
+            crate::textln!(
                 "  {} Fetching release {} ...",
                 s.dim.apply_to("→"),
                 s.cyan.apply_to(t),
@@ -56,7 +56,7 @@ pub(crate) async fn update(options: UpdateOptions) -> Result<()> {
             github::fetch_release_by_tag(t).await?
         }
         None => {
-            println!("  {} Checking for latest release ...", s.dim.apply_to("→"),);
+            crate::textln!("  {} Checking for latest release ...", s.dim.apply_to("→"),);
             github::fetch_latest_release().await?
         }
     };
@@ -68,16 +68,16 @@ pub(crate) async fn update(options: UpdateOptions) -> Result<()> {
 
     // Compare versions
     if tag.is_none() && release_version == current_version {
-        println!(
+        crate::textln!(
             "  {} Already up to date (v{})",
             s.green.apply_to("✔"),
             current_version,
         );
-        println!();
+        crate::textln!();
         return Ok(());
     }
 
-    println!(
+    crate::textln!(
         "  {}  {}",
         s.dim.apply_to("Available version:"),
         s.bold.apply_to(format!("v{release_version}")),
@@ -96,22 +96,26 @@ pub(crate) async fn update(options: UpdateOptions) -> Result<()> {
 
     if options.check {
         if release_version == current_version {
-            println!("  {} Already up to date", s.green.apply_to("✔"),);
+            crate::textln!("  {} Already up to date", s.green.apply_to("✔"),);
         } else {
-            println!(
+            crate::textln!(
                 "  {} Update available: v{} → v{}",
                 s.cyan.apply_to("→"),
                 current_version,
                 release_version,
             );
         }
-        println!();
+        crate::textln!();
         return Ok(());
     }
 
     // Confirm unless --yes or explicit version
+    if !options.yes && tag.is_none() && crate::output::is_non_interactive() {
+        bail!("installing an update requires confirmation; re-run with --yes");
+    }
+
     if !options.yes && tag.is_none() {
-        println!();
+        crate::textln!();
         let confirmed = dialoguer::Confirm::new()
             .with_prompt(format!("  Install v{release_version}?"))
             .default(true)
@@ -119,15 +123,15 @@ pub(crate) async fn update(options: UpdateOptions) -> Result<()> {
             .context("failed to read input")?;
 
         if !confirmed {
-            println!("  Aborted.");
-            println!();
+            crate::textln!("  Aborted.");
+            crate::textln!();
             return Ok(());
         }
     }
 
     // Download archive
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} Downloading {} ...",
         s.dim.apply_to("→"),
         s.cyan.apply_to(&archive_asset.name),
@@ -139,7 +143,7 @@ pub(crate) async fn update(options: UpdateOptions) -> Result<()> {
     // Replacing the running binary without a digest is a trust footgun.
     match checksum_asset {
         Some(cs_asset) => {
-            println!("  {} Verifying checksum ...", s.dim.apply_to("→"),);
+            crate::textln!("  {} Verifying checksum ...", s.dim.apply_to("→"),);
 
             let expected = github::download_checksum(&cs_asset.browser_download_url).await?;
             let actual = sha256_hex(&archive_bytes);
@@ -153,10 +157,10 @@ pub(crate) async fn update(options: UpdateOptions) -> Result<()> {
                 );
             }
 
-            println!("  {} Checksum verified", s.green.apply_to("✔"),);
+            crate::textln!("  {} Checksum verified", s.green.apply_to("✔"),);
         }
         None if options.force_insecure => {
-            println!(
+            crate::textln!(
                 "  {} No checksum asset found — installing anyway (--force-insecure)",
                 s.yellow.apply_to("⚠"),
             );
@@ -171,7 +175,7 @@ pub(crate) async fn update(options: UpdateOptions) -> Result<()> {
     }
 
     // Extract binary from tar.gz
-    println!("  {} Extracting binary ...", s.dim.apply_to("→"),);
+    crate::textln!("  {} Extracting binary ...", s.dim.apply_to("→"),);
 
     let binary_data = extract_binary_from_tar_gz(&archive_bytes)?;
 
@@ -180,7 +184,7 @@ pub(crate) async fn update(options: UpdateOptions) -> Result<()> {
         std::env::current_exe().context("could not determine current executable path")?;
     let current_exe = current_exe.canonicalize().unwrap_or(current_exe);
 
-    println!(
+    crate::textln!(
         "  {} Installing to {} ...",
         s.dim.apply_to("→"),
         s.dim.apply_to(current_exe.display().to_string()),
@@ -188,13 +192,13 @@ pub(crate) async fn update(options: UpdateOptions) -> Result<()> {
 
     replace_binary(&current_exe, &binary_data)?;
 
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} Updated to v{}",
         s.green.apply_to("✔"),
         s.bold.apply_to(release_version),
     );
-    println!();
+    crate::textln!();
 
     Ok(())
 }
