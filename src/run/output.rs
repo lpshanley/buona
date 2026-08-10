@@ -187,3 +187,139 @@ pub(super) fn print_dry_run_command_stage(
         s.dim.apply_to(suffix),
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    use crate::run::hooks::{HookResolution, HookWarning};
+    use crate::run::targets::ExecutionTarget;
+    use crate::run::types::{BuildSystem, HookPhase, ResolvedHook, SkipReason};
+
+    fn plan(kind: PlanKind) -> ExecutionPlan {
+        ExecutionPlan {
+            cwd: PathBuf::from("/tmp/demo"),
+            system: Some(BuildSystem::Cargo),
+            kind,
+            program: Some("cargo".to_string()),
+            args: vec!["test".to_string(), "--all-targets".to_string()],
+            display: "cargo test --all-targets".to_string(),
+            skip_reason: None,
+        }
+    }
+
+    fn resolved_hook(name: &str, phase: HookPhase, source: HookSource) -> ResolvedHook {
+        ResolvedHook {
+            phase,
+            name: name.to_string(),
+            source,
+            program: "sh".to_string(),
+            args: vec![format!("{name}.sh")],
+            cwd: PathBuf::from("/tmp/demo"),
+            display: format!("sh {name}.sh"),
+        }
+    }
+
+    fn hook_resolution() -> HookResolution {
+        HookResolution {
+            pre_hook: Some(resolved_hook(
+                "pretest",
+                HookPhase::Pre,
+                HookSource::Explicit,
+            )),
+            post_hook: Some(resolved_hook(
+                "posttest",
+                HookPhase::Post,
+                HookSource::Convention,
+            )),
+            warnings: vec![HookWarning {
+                hook_name: "pretest".to_string(),
+                message: "example warning".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn target_plan_json_covers_all_plan_kinds_and_hook_sources() {
+        for (kind, label) in [
+            (PlanKind::Standard, "standard"),
+            (PlanKind::Proxy, "proxy"),
+            (PlanKind::ExecOverride, "exec-override"),
+            (PlanKind::Noop, "noop"),
+        ] {
+            let target_plan = TargetRunPlan {
+                target: ExecutionTarget {
+                    name: "demo".to_string(),
+                    dir: PathBuf::from("/tmp/demo"),
+                    is_workspace_root: false,
+                },
+                plan: plan(kind),
+                hooks: hook_resolution(),
+            };
+
+            let document = target_plan_json(&target_plan);
+            assert_eq!(document["target"]["name"], "demo");
+            assert_eq!(document["target"]["kind"], "package");
+            assert_eq!(document["plan"]["kind"], label);
+            assert_eq!(document["hooks"]["pre"]["source"], "explicit");
+            assert_eq!(document["hooks"]["post"]["source"], "convention");
+            assert_eq!(document["hooks"]["warnings"][0]["hook"], "pretest");
+        }
+
+        let root_plan = TargetRunPlan {
+            target: ExecutionTarget {
+                name: "ignored".to_string(),
+                dir: PathBuf::from("/tmp/workspace"),
+                is_workspace_root: true,
+            },
+            plan: plan(PlanKind::Standard),
+            hooks: HookResolution {
+                pre_hook: None,
+                post_hook: None,
+                warnings: Vec::new(),
+            },
+        };
+        assert_eq!(
+            target_plan_json(&root_plan)["target"]["kind"],
+            "workspace-root"
+        );
+    }
+
+    #[test]
+    fn text_renderers_cover_verbose_hooks_and_dry_run_states() {
+        let styles = Styles::default();
+        let standard = plan(PlanKind::Standard);
+        print_plan_info(&styles, "demo", &standard, true);
+        print_plan_info(&styles, "demo", &standard, false);
+
+        let skipped = ExecutionPlan {
+            cwd: PathBuf::from("/tmp/demo"),
+            system: None,
+            kind: PlanKind::Noop,
+            program: None,
+            args: Vec::new(),
+            display: "noop".to_string(),
+            skip_reason: Some(SkipReason::NoSystemDetected),
+        };
+        print_plan_info(&styles, "demo", &skipped, true);
+
+        let hooks = hook_resolution();
+        print_recursive_graph_header(&styles);
+        print_hook_warnings(&styles, &hooks);
+        print_hook_info(&styles, &hooks);
+        print_hook_info(
+            &styles,
+            &HookResolution {
+                pre_hook: None,
+                post_hook: None,
+                warnings: Vec::new(),
+            },
+        );
+        print_dry_run_stage(&styles, "target:demo/pre", Some("sh pretest.sh"));
+        print_dry_run_stage(&styles, "target:demo/post", None);
+        print_dry_run_command_stage(&styles, "target:demo/cmd", &standard, false);
+        print_dry_run_command_stage(&styles, "target:demo/cmd", &skipped, true);
+        print_dry_run_command_stage(&styles, "target:demo/cmd", &skipped, false);
+    }
+}

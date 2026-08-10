@@ -35,18 +35,24 @@ impl Default for OutputSettings {
     }
 }
 
+impl OutputSettings {
+    fn new(format: OutputFormat, no_color: bool, non_interactive: bool) -> Self {
+        Self {
+            format,
+            // A machine-readable command must never stop for terminal input.
+            non_interactive: non_interactive || format == OutputFormat::Json,
+            colors: !no_color,
+        }
+    }
+}
+
 static SETTINGS: OnceLock<OutputSettings> = OnceLock::new();
 
 pub(crate) fn configure(format: OutputFormat, no_color: bool, non_interactive: bool) {
-    let colors = !no_color;
-    let _ = SETTINGS.set(OutputSettings {
-        format,
-        // A machine-readable command must never stop for terminal input.
-        non_interactive: non_interactive || format == OutputFormat::Json,
-        colors,
-    });
+    let settings = OutputSettings::new(format, no_color, non_interactive);
+    let _ = SETTINGS.set(settings);
 
-    if !colors {
+    if !settings.colors {
         console::set_colors_enabled(false);
         console::set_colors_enabled_stderr(false);
     }
@@ -147,4 +153,70 @@ macro_rules! text_errln {
             eprintln!($($arg)*);
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn settings_defaults_are_human_readable_and_interactive() {
+        let defaults = OutputSettings::default();
+        assert_eq!(defaults.format, OutputFormat::Text);
+        assert!(!defaults.non_interactive);
+        assert!(defaults.colors);
+
+        assert!(!is_json());
+        assert!(is_text());
+        assert!(!is_non_interactive());
+        assert!(colors_enabled());
+    }
+
+    #[test]
+    fn json_settings_are_non_interactive_and_color_policy_is_explicit() {
+        let json = OutputSettings::new(OutputFormat::Json, true, false);
+        assert_eq!(json.format, OutputFormat::Json);
+        assert!(json.non_interactive);
+        assert!(!json.colors);
+
+        let text = OutputSettings::new(OutputFormat::Text, false, true);
+        assert_eq!(text.format, OutputFormat::Text);
+        assert!(text.non_interactive);
+        assert!(text.colors);
+    }
+
+    #[test]
+    fn json_request_detection_supports_split_and_equals_forms() {
+        let split = ["buona", "inspect", "--output", "json"]
+            .map(OsString::from)
+            .to_vec();
+        let equals = ["buona", "--output=json", "detect"]
+            .map(OsString::from)
+            .to_vec();
+        let text = ["buona", "--output", "text", "inspect"]
+            .map(OsString::from)
+            .to_vec();
+        let incomplete = ["buona", "inspect", "--output"]
+            .map(OsString::from)
+            .to_vec();
+
+        assert!(json_requested(&split));
+        assert!(json_requested(&equals));
+        assert!(!json_requested(&text));
+        assert!(!json_requested(&incomplete));
+    }
+
+    #[test]
+    fn structured_documents_serialize_without_error() {
+        print_json(&json!({ "ok": true, "items": [1, 2] })).unwrap();
+        print_success("test.operation", json!({ "changed": true })).unwrap();
+        print_error(
+            "configuration",
+            "invalid config",
+            68,
+            Some("check buona.json"),
+            Some("demo"),
+        );
+    }
 }

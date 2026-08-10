@@ -170,4 +170,49 @@ mod tests {
             "command \"cargo test\" failed with exit code 101"
         );
     }
+
+    #[test]
+    fn structured_codes_and_hints_cover_every_variant() {
+        let cases = [
+            (
+                RunError::NoPackageResolved("missing target".to_string()),
+                "target-resolution",
+                Some("Run from a package directory or select a target explicitly."),
+            ),
+            (
+                RunError::ConfigError("invalid config".to_string()),
+                "configuration",
+                Some("Check buona.json and the command arguments."),
+            ),
+            (
+                RunError::AmbiguousHook {
+                    hook_name: "pretest".to_string(),
+                    candidates: vec!["pretest.sh".to_string(), "pretest.py".to_string()],
+                },
+                "ambiguous-hook",
+                Some("Keep only one matching hook file or configure the hook explicitly."),
+            ),
+            (
+                RunError::CommandFailed {
+                    command: "cargo test".to_string(),
+                    exit_code: 1,
+                },
+                "command-failed",
+                None,
+            ),
+            (
+                RunError::HookFailed {
+                    hook_name: "pretest".to_string(),
+                    exit_code: 1,
+                },
+                "hook-failed",
+                None,
+            ),
+        ];
+
+        for (error, code, hint) in cases {
+            assert_eq!(error.code(), code);
+            assert_eq!(error.hint(), hint);
+        }
+    }
 }
