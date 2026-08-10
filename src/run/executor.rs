@@ -58,6 +58,23 @@ pub(super) async fn execute_recursive(
     }
 
     if options.dry_run {
+        if crate::output::is_json() {
+            let mut targets = vec![output::target_plan_json(&ws_plan)];
+            targets.extend(pkg_plans.iter().map(output::target_plan_json));
+            crate::output::print_json(&serde_json::json!({
+                "command": options.command,
+                "args": options.args,
+                "dry_run": true,
+                "recursive": true,
+                "execution": {
+                    "parallel": exec.parallel,
+                    "jobs": exec.jobs,
+                    "fail_policy": exec.fail_policy.to_string(),
+                },
+                "targets": targets,
+            }))?;
+            return Ok(());
+        }
         output::print_recursive_graph_header(&s);
         output::print_dry_run_stage(
             &s,
@@ -65,7 +82,7 @@ pub(super) async fn execute_recursive(
             ws_plan.hooks.pre_hook.as_ref().map(|x| x.display.as_str()),
         );
         output::print_dry_run_command_stage(&s, "workspace/cmd", &ws_plan.plan, options.verbose);
-        println!(
+        crate::textln!(
             "  {} {} (parallel: {}, jobs: {}, fail-policy: {})",
             s.dim.apply_to("·"),
             s.bold.apply_to("workspace/pkg-exec"),
@@ -99,7 +116,7 @@ pub(super) async fn execute_recursive(
             "workspace/post",
             ws_plan.hooks.post_hook.as_ref().map(|x| x.display.as_str()),
         );
-        println!();
+        crate::textln!();
         return Ok(());
     }
 
@@ -293,6 +310,7 @@ async fn run_child(
     mode: OutputMode,
 ) -> Result<std::process::ExitStatus> {
     command.kill_on_drop(true);
+    apply_color_envs(command);
 
     if mode == OutputMode::Inherit {
         let mut child = command.spawn()?;
@@ -300,7 +318,6 @@ async fn run_child(
     }
 
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    apply_color_envs(command);
     let mut child = command.spawn()?;
 
     let prefix = format!("[target:{target_label}/{stage}]");
@@ -346,7 +363,14 @@ where
 
 /// Encourage color output from piped children (they can't see a TTY).
 fn apply_color_envs(command: &mut Command) {
-    if std::env::var_os("NO_COLOR").is_none() {
+    if !crate::output::colors_enabled() {
+        command
+            .env("NO_COLOR", "1")
+            .env("CLICOLOR", "0")
+            .env("CARGO_TERM_COLOR", "never")
+            .env_remove("CLICOLOR_FORCE")
+            .env_remove("FORCE_COLOR");
+    } else if std::env::var_os("NO_COLOR").is_none() {
         command
             .env("CLICOLOR_FORCE", "1")
             .env("FORCE_COLOR", "1")

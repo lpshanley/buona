@@ -34,6 +34,9 @@ jobs:
       - name: Run tests
         run: cargo test --all-targets --all-features
 
+      - name: Verify documentation and agent contracts
+        run: cargo test --test docs_contract --test agent_cli
+
   build:
     name: Build ${{ matrix.target }}
     needs: gate

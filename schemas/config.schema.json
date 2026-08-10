@@ -49,6 +49,18 @@
           "default": "package"
         }
       }
+    },
+    "default_packages": {
+      "type": "array",
+      "description": "Package specifiers added to new workspaces by default.",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "workspace_template": {
+      "type": ["string", "null"],
+      "description": "Optional template directory copied into new workspaces. Supports ~ for the home directory."
     }
   }
 }

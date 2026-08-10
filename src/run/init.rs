@@ -50,25 +50,25 @@ pub(super) async fn init_in_dir(dir: &Path, options: InitOptions) -> Result<()> 
     let contents = render_buona_json(system);
     fsutil::write_atomic(&path, &contents).await?;
 
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} Created {}",
         s.green.apply_to("✔"),
         s.bold.apply_to(path.display())
     );
     if let Some(system) = system {
-        println!(
+        crate::textln!(
             "  {} system: {}",
             s.dim.apply_to("→"),
             s.cyan.apply_to(system.to_string())
         );
     } else {
-        println!(
+        crate::textln!(
             "  {} no build system detected; system will auto-detect at runtime",
             s.dim.apply_to("→")
         );
     }
-    println!();
+    crate::textln!();
 
     Ok(())
 }

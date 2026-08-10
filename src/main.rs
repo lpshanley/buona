@@ -2,6 +2,7 @@
 
 mod config;
 mod fsutil;
+mod output;
 mod path_value;
 mod run;
 mod self_update;
@@ -12,6 +13,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use serde_json::json;
 
 #[derive(Parser)]
 #[command(
@@ -21,6 +23,18 @@ use clap::{Parser, Subcommand};
     arg_required_else_help = true
 )]
 struct Cli {
+    /// Select human-readable or machine-readable output
+    #[arg(long, global = true, value_enum, default_value_t)]
+    output: output::OutputFormat,
+
+    /// Disable terminal colors, including colors requested from child commands
+    #[arg(long, global = true)]
+    no_color: bool,
+
+    /// Never prompt; fail with a hint when explicit confirmation is required
+    #[arg(long, global = true)]
+    non_interactive: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -51,6 +65,13 @@ enum Commands {
         /// Detect recursively across workspace root and all packages (alphabetical)
         #[arg(short, long)]
         recursive: bool,
+    },
+
+    /// Describe the current workspace, target, configuration, and command plans
+    Inspect {
+        /// Inspect a specific workspace target (`root` or package name)
+        #[arg(short = 't', long = "target")]
+        target: Option<String>,
     },
 
     /// Create a `buona.json` in the current directory
@@ -222,9 +243,14 @@ enum WorkspaceCommands {
         /// Name or directory of the workspace to delete
         workspace: String,
 
-        /// Skip the confirmation prompt
-        #[arg(short, long)]
-        force: bool,
+        /// Confirm deletion without prompting
+        #[arg(
+            short = 'y',
+            long = "yes",
+            visible_alias = "force",
+            visible_short_alias = 'f'
+        )]
+        yes: bool,
     },
 
     /// Rename a workspace (updates metadata and the directory name)
@@ -261,9 +287,14 @@ enum WorkspaceCommands {
         #[arg(short, long)]
         workspace: Option<String>,
 
-        /// Skip the confirmation prompt
-        #[arg(short, long)]
-        force: bool,
+        /// Confirm removal without prompting
+        #[arg(
+            short = 'y',
+            long = "yes",
+            visible_alias = "force",
+            visible_short_alias = 'f'
+        )]
+        yes: bool,
     },
 
     /// Pull latest changes for all packages and sync the workspace file
@@ -416,7 +447,30 @@ enum SelfCommands {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let json_requested = output::json_requested(&args);
+    let cli = match Cli::try_parse_from(args) {
+        Ok(cli) => cli,
+        Err(error) => {
+            let exit_code = error.exit_code() as u8;
+            if exit_code == 0 {
+                let _ = error.print();
+            } else if json_requested {
+                output::print_error(
+                    "usage",
+                    &error.to_string(),
+                    exit_code,
+                    Some("Run `buona --help` for command usage."),
+                    None,
+                );
+            } else {
+                let _ = error.print();
+            }
+            return ExitCode::from(exit_code);
+        }
+    };
+
+    output::configure(cli.output, cli.no_color, cli.non_interactive);
 
     match dispatch(cli).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -424,11 +478,26 @@ async fn main() -> ExitCode {
             // RunError carries a specific exit code (forwarded child exit
             // codes, or the documented 65/68/69 config errors).
             if let Some(run_err) = e.downcast_ref::<run::RunError>() {
-                eprintln!("error: {run_err}");
-                return ExitCode::from(run_err.exit_code().clamp(1, 255) as u8);
+                let exit_code = run_err.exit_code().clamp(1, 255) as u8;
+                if output::is_json() {
+                    output::print_error(
+                        run_err.code(),
+                        &run_err.to_string(),
+                        exit_code,
+                        run_err.hint(),
+                        None,
+                    );
+                } else {
+                    eprintln!("error: {run_err}");
+                }
+                return ExitCode::from(exit_code);
             }
             // {:#} prints the anyhow context chain in a readable form.
-            eprintln!("error: {e:#}");
+            if output::is_json() {
+                output::print_error("error", &format!("{e:#}"), 1, None, None);
+            } else {
+                eprintln!("error: {e:#}");
+            }
             ExitCode::FAILURE
         }
     }
@@ -439,7 +508,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
         Commands::Config { command } => match command {
             ConfigCommands::Show { json } => {
                 let cfg = config::load_config().await?;
-                if json {
+                if json || output::is_json() {
                     config::print_json(&cfg)?;
                 } else {
                     config::print_pretty(&cfg).await?;
@@ -447,21 +516,26 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
             }
             ConfigCommands::Setup => {
                 config::run_setup().await?;
+                output::print_success("config.setup", json!({}))?;
             }
             ConfigCommands::Set { key, value, json } => {
                 config::set_value(&key, value.as_deref(), json).await?;
+                output::print_success("config.set", json!({ "key": key }))?;
             }
             ConfigCommands::Get { key } => {
                 config::get_value(&key).await?;
             }
             ConfigCommands::Unset { key } => {
                 config::unset_value(&key).await?;
+                output::print_success("config.unset", json!({ "key": key }))?;
             }
             ConfigCommands::Add { key, values } => {
                 config::add_to_list(&key, &values).await?;
+                output::print_success("config.add", json!({ "key": key, "values": values }))?;
             }
             ConfigCommands::Remove { key, values } => {
                 config::remove_from_list(&key, &values).await?;
+                output::print_success("config.remove", json!({ "key": key, "values": values }))?;
             }
         },
         Commands::Workspace { command } => match command {
@@ -493,9 +567,11 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
                     },
                 )
                 .await?;
+                output::print_success("workspace.create", json!({ "path": path, "name": name }))?;
             }
-            WorkspaceCommands::Delete { workspace, force } => {
-                workspace::delete(&workspace, force).await?;
+            WorkspaceCommands::Delete { workspace, yes } => {
+                workspace::delete(&workspace, yes).await?;
+                output::print_success("workspace.delete", json!({ "workspace": workspace }))?;
             }
             WorkspaceCommands::Rename {
                 workspace,
@@ -503,19 +579,35 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
                 keep_directory,
             } => {
                 workspace::rename(&workspace, &new_name, keep_directory).await?;
+                output::print_success(
+                    "workspace.rename",
+                    json!({
+                        "workspace": workspace,
+                        "new_name": new_name,
+                        "keep_directory": keep_directory,
+                    }),
+                )?;
             }
             WorkspaceCommands::Add {
                 packages,
                 workspace,
             } => {
                 workspace::add(&packages, workspace.as_deref()).await?;
+                output::print_success(
+                    "workspace.add",
+                    json!({ "workspace": workspace, "packages": packages }),
+                )?;
             }
             WorkspaceCommands::Remove {
                 packages,
                 workspace,
-                force,
+                yes,
             } => {
-                workspace::remove_packages(&packages, workspace.as_deref(), force).await?;
+                workspace::remove_packages(&packages, workspace.as_deref(), yes).await?;
+                output::print_success(
+                    "workspace.remove",
+                    json!({ "workspace": workspace, "packages": packages }),
+                )?;
             }
             WorkspaceCommands::Sync {
                 packages,
@@ -523,9 +615,18 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
                 fetch,
             } => {
                 workspace::sync(&packages, workspace.as_deref(), fetch).await?;
+                output::print_success(
+                    "workspace.sync",
+                    json!({
+                        "workspace": workspace,
+                        "packages": packages,
+                        "fetch_only": fetch,
+                    }),
+                )?;
             }
             WorkspaceCommands::Open { workspace } => {
                 workspace::open(workspace.as_deref()).await?;
+                output::print_success("workspace.open", json!({ "workspace": workspace }))?;
             }
             WorkspaceCommands::Config { command } => match command {
                 WorkspaceConfigCommands::Set {
@@ -536,12 +637,20 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
                 } => {
                     workspace::config_set(&key, value.as_deref(), json, workspace.as_deref())
                         .await?;
+                    output::print_success(
+                        "workspace.config.set",
+                        json!({ "workspace": workspace, "key": key }),
+                    )?;
                 }
                 WorkspaceConfigCommands::Get { key, workspace } => {
                     workspace::config_get(&key, workspace.as_deref()).await?;
                 }
                 WorkspaceConfigCommands::Unset { key, workspace } => {
                     workspace::config_unset(&key, workspace.as_deref()).await?;
+                    output::print_success(
+                        "workspace.config.unset",
+                        json!({ "workspace": workspace, "key": key }),
+                    )?;
                 }
                 WorkspaceConfigCommands::Add {
                     key,
@@ -549,6 +658,10 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
                     workspace,
                 } => {
                     workspace::config_add(&key, &values, workspace.as_deref()).await?;
+                    output::print_success(
+                        "workspace.config.add",
+                        json!({ "workspace": workspace, "key": key, "values": values }),
+                    )?;
                 }
                 WorkspaceConfigCommands::Remove {
                     key,
@@ -556,10 +669,14 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
                     workspace,
                 } => {
                     workspace::config_remove(&key, &values, workspace.as_deref()).await?;
+                    output::print_success(
+                        "workspace.config.remove",
+                        json!({ "workspace": workspace, "key": key, "values": values }),
+                    )?;
                 }
             },
             WorkspaceCommands::Info { workspace, json } => {
-                workspace::info(workspace.as_deref(), json).await?;
+                workspace::info(workspace.as_deref(), json || output::is_json()).await?;
             }
             WorkspaceCommands::Adopt {
                 path,
@@ -574,13 +691,29 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
                     name.as_deref(),
                 )
                 .await?;
+                output::print_success(
+                    "workspace.adopt",
+                    json!({
+                        "workspace": workspace,
+                        "path": path,
+                        "copy": copy,
+                        "name": name,
+                    }),
+                )?;
             }
         },
         Commands::Detect { targets, recursive } => {
             run::detect(targets, recursive).await?;
         }
+        Commands::Inspect { target } => {
+            run::inspect(target).await?;
+        }
         Commands::Init { system, force } => {
             run::init(run::InitOptions { system, force }).await?;
+            output::print_success(
+                "init",
+                json!({ "system": system.map(|value| value.to_string()), "force": force }),
+            )?;
         }
         Commands::Run {
             system,
@@ -619,9 +752,13 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
                     check,
                     yes,
                     force_insecure,
-                    version,
+                    version: version.clone(),
                 })
                 .await?;
+                output::print_success(
+                    "self.update",
+                    json!({ "check": check, "version": version }),
+                )?;
             }
         },
     }

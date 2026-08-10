@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use crate::path_value;
 use crate::styles::Styles;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use dialoguer::{Input, Select};
 use serde::{Deserialize, Serialize};
@@ -240,20 +240,20 @@ pub(crate) async fn print_pretty(config: &BuonaConfig) -> Result<()> {
     let path = config_file_path()?;
     let file_exists = tokio::fs::try_exists(&path).await.unwrap_or(false);
 
-    println!();
-    println!("  {}", s.bold.apply_to("Buona Configuration"));
-    println!("  {}", s.dim.apply_to("───────────────────"));
-    println!(
+    crate::textln!();
+    crate::textln!("  {}", s.bold.apply_to("Buona Configuration"));
+    crate::textln!("  {}", s.dim.apply_to("───────────────────"));
+    crate::textln!(
         "  {}  {}",
         s.cyan.apply_to("Workspace Directory:"),
         config.workspace_dir
     );
-    println!("  {}  {}", s.cyan.apply_to("IDE:"), config.ide);
-    println!();
-    println!("  {}", s.bold.apply_to("Git Defaults"));
-    println!("  {}", s.dim.apply_to("───────────────────"));
-    println!("  {}  {}", s.cyan.apply_to("Host:"), config.git.host);
-    println!(
+    crate::textln!("  {}  {}", s.cyan.apply_to("IDE:"), config.ide);
+    crate::textln!();
+    crate::textln!("  {}", s.bold.apply_to("Git Defaults"));
+    crate::textln!("  {}", s.dim.apply_to("───────────────────"));
+    crate::textln!("  {}  {}", s.cyan.apply_to("Host:"), config.git.host);
+    crate::textln!(
         "  {}  {}",
         s.cyan.apply_to("Organization:"),
         if config.git.organization.is_empty() {
@@ -262,49 +262,49 @@ pub(crate) async fn print_pretty(config: &BuonaConfig) -> Result<()> {
             config.git.organization.clone()
         }
     );
-    println!(
+    crate::textln!(
         "  {}  {}",
         s.cyan.apply_to("Protocol:"),
         config.git.protocol
     );
-    println!(
+    crate::textln!(
         "  {}  {}",
         s.cyan.apply_to("Tracking:"),
         config.git.tracking
     );
-    println!();
+    crate::textln!();
 
     if !config.default_packages.is_empty() || config.workspace_template.is_some() {
-        println!("  {}", s.bold.apply_to("Workspace Defaults"));
-        println!("  {}", s.dim.apply_to("───────────────────"));
+        crate::textln!("  {}", s.bold.apply_to("Workspace Defaults"));
+        crate::textln!("  {}", s.dim.apply_to("───────────────────"));
         if !config.default_packages.is_empty() {
-            println!(
+            crate::textln!(
                 "  {}  {}",
                 s.cyan.apply_to("Default Packages:"),
                 config.default_packages.join(", ")
             );
         }
         if let Some(ref tmpl) = config.workspace_template {
-            println!("  {}  {}", s.cyan.apply_to("Workspace Template:"), tmpl);
+            crate::textln!("  {}  {}", s.cyan.apply_to("Workspace Template:"), tmpl);
         }
-        println!();
+        crate::textln!();
     }
 
     if !file_exists {
-        println!(
+        crate::textln!(
             "  {}",
             s.dim.apply_to(format!(
                 "No config file found. Showing defaults. Run {} to create one.",
                 s.bold.apply_to("buona config setup")
             ))
         );
-        println!();
+        crate::textln!();
     } else {
-        println!(
+        crate::textln!(
             "  {}",
             s.dim.apply_to(format!("Config file: {}", path.display()))
         );
-        println!();
+        crate::textln!();
     }
 
     Ok(())
@@ -312,20 +312,24 @@ pub(crate) async fn print_pretty(config: &BuonaConfig) -> Result<()> {
 
 /// Print the configuration as JSON.
 pub(crate) fn print_json(config: &BuonaConfig) -> Result<()> {
-    let json = serde_json::to_string_pretty(config)?;
-    println!("{json}");
-    Ok(())
+    crate::output::print_json(config)
 }
 
 /// Run the interactive setup wizard.
 pub(crate) async fn run_setup() -> Result<()> {
+    if crate::output::is_non_interactive() {
+        bail!(
+            "config setup requires terminal input; use `buona config set` for non-interactive configuration"
+        );
+    }
+
     let current = load_config().await?;
     let s = Styles::default();
 
-    println!();
-    println!("  {} Buona Configuration Setup", s.bold.apply_to("🔧"));
-    println!("  {}", s.dim.apply_to("───────────────────────────"));
-    println!();
+    crate::textln!();
+    crate::textln!("  {} Buona Configuration Setup", s.bold.apply_to("🔧"));
+    crate::textln!("  {}", s.dim.apply_to("───────────────────────────"));
+    crate::textln!();
 
     let workspace_dir: String = Input::new()
         .with_prompt(format!("  {}", s.bold.apply_to("Workspace directory")))
@@ -345,10 +349,10 @@ pub(crate) async fn run_setup() -> Result<()> {
 
     let ide = Ide::ALL[ide_index];
 
-    println!();
-    println!("  {} Git Defaults", s.bold.apply_to("🔗"));
-    println!("  {}", s.dim.apply_to("───────────────────────────"));
-    println!();
+    crate::textln!();
+    crate::textln!("  {} Git Defaults", s.bold.apply_to("🔗"));
+    crate::textln!("  {}", s.dim.apply_to("───────────────────────────"));
+    crate::textln!();
 
     let git_host: String = Input::new()
         .with_prompt(format!("  {}", s.bold.apply_to("Git host")))
@@ -408,13 +412,13 @@ pub(crate) async fn run_setup() -> Result<()> {
 
     save_config(&config).await?;
 
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} Configuration saved to {}",
         s.green.apply_to("✔"),
         s.dim.apply_to(config_file_path()?.display().to_string())
     );
-    println!();
+    crate::textln!();
 
     Ok(())
 }
@@ -452,7 +456,11 @@ pub(crate) async fn get_value(key: &str) -> Result<()> {
     let value = serde_json::to_value(cfg)?;
     let tokens = path_value::parse_path(key)?;
     let found = path_value::get_path(&value, &tokens)?;
-    path_value::print_value(found)
+    if crate::output::is_json() {
+        crate::output::print_json(found)
+    } else {
+        path_value::print_value(found)
+    }
 }
 
 /// Add values to a list field in the global config.

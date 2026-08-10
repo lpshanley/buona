@@ -5,7 +5,7 @@
   "description": "Workspace metadata for a buona-managed workspace (buona.workspace.json).",
   "type": "object",
   "required": ["name"],
-  "additionalProperties": true,
+  "additionalProperties": false,
   "properties": {
     "$schema": {
       "type": "string"

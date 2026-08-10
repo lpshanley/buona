@@ -23,6 +23,29 @@ pub(crate) enum RunError {
 }
 
 impl RunError {
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            RunError::NoPackageResolved(_) => "target-resolution",
+            RunError::ConfigError(_) => "configuration",
+            RunError::AmbiguousHook { .. } => "ambiguous-hook",
+            RunError::CommandFailed { .. } => "command-failed",
+            RunError::HookFailed { .. } => "hook-failed",
+        }
+    }
+
+    pub(crate) fn hint(&self) -> Option<&'static str> {
+        match self {
+            RunError::NoPackageResolved(_) => {
+                Some("Run from a package directory or select a target explicitly.")
+            }
+            RunError::ConfigError(_) => Some("Check buona.json and the command arguments."),
+            RunError::AmbiguousHook { .. } => {
+                Some("Keep only one matching hook file or configure the hook explicitly.")
+            }
+            RunError::CommandFailed { .. } | RunError::HookFailed { .. } => None,
+        }
+    }
+
     /// Returns the exit code for this error.
     pub(crate) fn exit_code(&self) -> i32 {
         match self {

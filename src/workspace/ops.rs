@@ -38,9 +38,9 @@ pub(crate) async fn list() -> Result<()> {
     let workspace_dir = config::workspace_dir().await?;
     let s = Styles::default();
 
-    println!();
-    println!("  {}", s.bold.apply_to("Workspaces"));
-    println!("  {}", s.dim.apply_to("──────────"));
+    crate::textln!();
+    crate::textln!("  {}", s.bold.apply_to("Workspaces"));
+    crate::textln!("  {}", s.dim.apply_to("──────────"));
 
     let mut entries = tokio::fs::read_dir(&workspace_dir).await.with_context(|| {
         format!(
@@ -61,8 +61,26 @@ pub(crate) async fn list() -> Result<()> {
 
     workspaces.sort_by(|a, b| a.0.cmp(&b.0));
 
+    if crate::output::is_json() {
+        let values = workspaces
+            .iter()
+            .map(|(directory_name, meta)| {
+                serde_json::json!({
+                    "name": meta.name,
+                    "directory_name": directory_name,
+                    "path": workspace_dir.join(directory_name),
+                    "metadata": meta,
+                })
+            })
+            .collect::<Vec<_>>();
+        return crate::output::print_json(&serde_json::json!({
+            "workspace_directory": workspace_dir,
+            "workspaces": values,
+        }));
+    }
+
     if workspaces.is_empty() {
-        println!(
+        crate::textln!(
             "  {}",
             s.dim.apply_to(format!(
                 "No workspaces found in {}",
@@ -70,27 +88,27 @@ pub(crate) async fn list() -> Result<()> {
             ))
         );
     } else {
-        println!(
+        crate::textln!(
             "  {}  {}",
             s.dim.apply_to("Directory:"),
             workspace_dir.display()
         );
-        println!();
+        crate::textln!();
         for (dir_name, meta) in &workspaces {
             if meta.name != *dir_name {
-                println!(
+                crate::textln!(
                     "  {}  {} {}",
                     s.cyan.apply_to("•"),
                     meta.name,
                     s.dim.apply_to(format!("({dir_name})"))
                 );
             } else {
-                println!("  {}  {dir_name}", s.cyan.apply_to("•"));
+                crate::textln!("  {}  {dir_name}", s.cyan.apply_to("•"));
             }
         }
     }
 
-    println!();
+    crate::textln!();
     Ok(())
 }
 
@@ -171,13 +189,13 @@ pub(crate) async fn create(path: &Path, options: CreateOptions<'_>) -> Result<()
 
     let cfg = config::load_config().await?;
 
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} Created workspace {}",
         s.green.apply_to("✔"),
         s.bold.apply_to(&meta.name)
     );
-    println!("  {}  {}", s.dim.apply_to("Location:"), target.display());
+    crate::textln!("  {}  {}", s.dim.apply_to("Location:"), target.display());
 
     // Merge default packages with explicit packages.
     // Defaults come first, then any explicit packages not already in defaults.
@@ -208,18 +226,31 @@ pub(crate) async fn create(path: &Path, options: CreateOptions<'_>) -> Result<()
             .await
             .unwrap_or(false)
     {
-        println!("  {} Running install hook", s.cyan.apply_to("→"),);
-        let status = tokio::process::Command::new(std::env::current_exe()?)
-            .args(["run", "install"])
-            .current_dir(&target)
+        crate::textln!("  {} Running install hook", s.cyan.apply_to("→"),);
+        let mut command = tokio::process::Command::new(std::env::current_exe()?);
+        command.args(["run", "install"]).current_dir(&target);
+        if crate::output::is_json() {
+            command
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+        }
+        if !crate::output::colors_enabled() {
+            command
+                .env("NO_COLOR", "1")
+                .env("CLICOLOR", "0")
+                .env("CARGO_TERM_COLOR", "never")
+                .env_remove("CLICOLOR_FORCE")
+                .env_remove("FORCE_COLOR");
+        }
+        let status = command
             .status()
             .await
             .context("failed to run install hook")?;
 
         if status.success() {
-            println!("  {} Install hook completed", s.green.apply_to("✔"),);
+            crate::textln!("  {} Install hook completed", s.green.apply_to("✔"),);
         } else {
-            println!(
+            crate::textln!(
                 "  {} Install hook exited with status {}",
                 s.yellow.apply_to("⚠"),
                 status,
@@ -232,7 +263,7 @@ pub(crate) async fn create(path: &Path, options: CreateOptions<'_>) -> Result<()
         open_workspace_at(&target, &cfg).await?;
     }
 
-    println!();
+    crate::textln!();
     Ok(())
 }
 
@@ -267,7 +298,7 @@ async fn setup_new_workspace(
             bail!("git init failed: {}", stderr.trim());
         }
 
-        println!(
+        crate::textln!(
             "  {} Initialized git repository at workspace root",
             s.green.apply_to("✔"),
         );
@@ -284,24 +315,27 @@ async fn setup_new_workspace(
                         .map(|m| m.is_dir())
                         .unwrap_or(false);
                     if is_dir {
-                        println!(
+                        crate::textln!(
                             "  {} Applying workspace template from {}",
                             s.cyan.apply_to("→"),
                             tmpl.display()
                         );
                         match super::template::apply_template(&tmpl, target).await {
                             Ok(()) => {
-                                println!("  {} Applied workspace template", s.green.apply_to("✔"),);
+                                crate::textln!(
+                                    "  {} Applied workspace template",
+                                    s.green.apply_to("✔"),
+                                );
                             }
                             Err(e) => {
-                                println!(
+                                crate::textln!(
                                     "  {} Could not apply workspace template: {e:#}",
                                     s.yellow.apply_to("⚠"),
                                 );
                             }
                         }
                     } else if !tokio::fs::try_exists(&tmpl).await.unwrap_or(false) {
-                        println!(
+                        crate::textln!(
                             "  {} Template path does not exist: {}",
                             s.yellow.apply_to("⚠"),
                             tmpl.display()
@@ -310,7 +344,7 @@ async fn setup_new_workspace(
                     // exists but not a directory — silently skip
                 }
                 Err(e) => {
-                    println!(
+                    crate::textln!(
                         "  {} Could not resolve template path: {}",
                         s.yellow.apply_to("⚠"),
                         e
@@ -334,8 +368,12 @@ pub(crate) async fn delete(query: &str, force: bool) -> Result<()> {
     let meta = read_meta(&target).await?;
     let display_name = meta.as_ref().map(|m| m.name.as_str()).unwrap_or(query);
 
+    if !force && crate::output::is_non_interactive() {
+        bail!("workspace deletion requires confirmation; re-run with --yes");
+    }
+
     if !force {
-        println!();
+        crate::textln!();
         let confirmed = Confirm::new()
             .with_prompt(format!(
                 "  Delete workspace {} at {}?",
@@ -347,8 +385,8 @@ pub(crate) async fn delete(query: &str, force: bool) -> Result<()> {
             .context("failed to read input")?;
 
         if !confirmed {
-            println!("  Aborted.");
-            println!();
+            crate::textln!("  Aborted.");
+            crate::textln!();
             return Ok(());
         }
     }
@@ -357,13 +395,13 @@ pub(crate) async fn delete(query: &str, force: bool) -> Result<()> {
         .await
         .with_context(|| format!("could not delete workspace directory: {}", target.display()))?;
 
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} Deleted workspace {}",
         s.green.apply_to("✔"),
         s.bold.apply_to(display_name)
     );
-    println!();
+    crate::textln!();
 
     Ok(())
 }
@@ -404,13 +442,13 @@ async fn rename_workspace_at(source: &Path, new_name: &str, keep_directory: bool
         .into_owned();
 
     if old_name == new_name && (keep_directory || dir_name == new_name) {
-        println!();
-        println!(
+        crate::textln!();
+        crate::textln!(
             "  {} Workspace is already named {}",
             s.dim.apply_to("•"),
             s.bold.apply_to(new_name)
         );
-        println!();
+        crate::textln!();
         return Ok(());
     }
 
@@ -484,20 +522,20 @@ async fn rename_workspace_at(source: &Path, new_name: &str, keep_directory: bool
 
     let ws_file_path = sync_workspace_file(&target, &meta).await?;
 
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} Renamed workspace {} to {}",
         s.green.apply_to("✔"),
         s.bold.apply_to(&old_name),
         s.bold.apply_to(new_name)
     );
-    println!("  {}  {}", s.dim.apply_to("Location:"), target.display());
-    println!(
+    crate::textln!("  {}  {}", s.dim.apply_to("Location:"), target.display());
+    crate::textln!(
         "  {} Synced {}",
         s.dim.apply_to("→"),
         ws_file_path.display()
     );
-    println!();
+    crate::textln!();
 
     Ok(())
 }
@@ -580,13 +618,13 @@ where
 
     write_meta(&ws_root, &next).await?;
     let ws_file_path = sync_workspace_file(&ws_root, &next).await?;
-    println!("  {} Updated workspace config", s.green.apply_to("✔"));
-    println!(
+    crate::textln!("  {} Updated workspace config", s.green.apply_to("✔"));
+    crate::textln!(
         "  {} Synced {}",
         s.dim.apply_to("→"),
         ws_file_path.display()
     );
-    println!();
+    crate::textln!();
 
     Ok(())
 }
@@ -616,7 +654,11 @@ pub(crate) async fn config_get(key: &str, workspace: Option<&str>) -> Result<()>
     let doc = serde_json::to_value(meta)?;
     let tokens = path_value::parse_path(key)?;
     let found = path_value::get_path(&doc, &tokens)?;
-    path_value::print_value(found)
+    if crate::output::is_json() {
+        crate::output::print_json(found)
+    } else {
+        path_value::print_value(found)
+    }
 }
 
 /// Reset a workspace configuration value to default.

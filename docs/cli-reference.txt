@@ -1,0 +1,20 @@
+The Good CLI — Workspace Bliss – Build More, Fuss Less.
+
+Usage: buona [OPTIONS] <COMMAND>
+
+Commands:
+  config     View or set up the global configuration
+  workspace  Manage workspaces
+  detect     Print the auto-detected build system for the current context/target(s)
+  inspect    Describe the current workspace, target, configuration, and command plans
+  init       Create a `buona.json` in the current directory
+  run        Run a command in the current context or explicit target(s)
+  self       Manage the buona binary itself
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --output <OUTPUT>  Select human-readable or machine-readable output [default: text] [possible values: text, json]
+      --no-color         Disable terminal colors, including colors requested from child commands
+      --non-interactive  Never prompt; fail with a hint when explicit confirmation is required
+  -h, --help             Print help
+  -V, --version          Print version

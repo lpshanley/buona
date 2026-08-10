@@ -3,6 +3,7 @@
 use std::env;
 
 use anyhow::{Context, Result};
+use serde_json::json;
 
 use crate::styles::Styles;
 
@@ -31,21 +32,34 @@ pub(super) async fn detect(targets: Vec<String>, recursive: bool) -> Result<()> 
         None => vec![resolve_local_target(&cwd).await?],
     };
 
-    println!();
+    let mut json_targets = Vec::new();
+    crate::textln!();
     for target in detect_targets {
         let detections = detect_all_systems(&target.dir).await;
-        println!(
+        json_targets.push(json!({
+            "target": {
+                "name": target.label(),
+                "kind": if target.is_workspace_root { "workspace-root" } else { "package" },
+                "directory": target.dir,
+            },
+            "winner": detections.first().map(|detection| detection.system.to_string()),
+            "detections": detections.iter().map(|detection| json!({
+                "system": detection.system.to_string(),
+                "marker": detection.marker,
+            })).collect::<Vec<_>>(),
+        }));
+        crate::textln!(
             "  {} {}",
             s.bold.apply_to("target:"),
             s.cyan.apply_to(target.label())
         );
         if detections.is_empty() {
-            println!("    {} noop", s.dim.apply_to("—"));
+            crate::textln!("    {} noop", s.dim.apply_to("—"));
             continue;
         }
 
         let winner = &detections[0];
-        println!(
+        crate::textln!(
             "    {} {} (via {})",
             s.green.apply_to("detected:"),
             s.bold.apply_to(winner.system.to_string()),
@@ -53,9 +67,9 @@ pub(super) async fn detect(targets: Vec<String>, recursive: bool) -> Result<()> 
         );
 
         if detections.len() > 1 {
-            println!("    {}", s.dim.apply_to("Other marker files found:"));
+            crate::textln!("    {}", s.dim.apply_to("Other marker files found:"));
             for d in &detections[1..] {
-                println!(
+                crate::textln!(
                     "    {}  {} (via {})",
                     s.dim.apply_to("·"),
                     d.system,
@@ -63,7 +77,11 @@ pub(super) async fn detect(targets: Vec<String>, recursive: bool) -> Result<()> 
                 );
             }
         }
-        println!();
+        crate::textln!();
+    }
+
+    if crate::output::is_json() {
+        crate::output::print_json(&json!({ "targets": json_targets }))?;
     }
 
     Ok(())

@@ -78,8 +78,8 @@ pub(super) async fn adopt_into_workspace(
             .unwrap_or(false);
 
     if already_in_place {
-        println!();
-        println!(
+        crate::textln!();
+        crate::textln!(
             "  {} Directory already at {}",
             s.dim.apply_to("→"),
             s.dim.apply_to(dest.display().to_string())
@@ -101,7 +101,7 @@ pub(super) async fn adopt_into_workspace(
         }
 
         if copy {
-            println!(
+            crate::textln!(
                 "  {} Copying {} to {} ...",
                 s.dim.apply_to("→"),
                 s.cyan.apply_to(&pkg_name),
@@ -110,7 +110,7 @@ pub(super) async fn adopt_into_workspace(
 
             copy_dir_into(&source, &dest).await?;
         } else {
-            println!(
+            crate::textln!(
                 "  {} Moving {} to {} ...",
                 s.dim.apply_to("→"),
                 s.cyan.apply_to(&pkg_name),
@@ -147,7 +147,7 @@ pub(super) async fn adopt_into_workspace(
                         adopted_git_dir.display()
                     )
                 })?;
-            println!(
+            crate::textln!(
                 "  {} Removed package-level .git (workspace-level tracking active)",
                 s.dim.apply_to("→"),
             );
@@ -157,14 +157,14 @@ pub(super) async fn adopt_into_workspace(
     // Sync the .code-workspace file (picks up the new directory in src/)
     sync_workspace_file(ws_root, &meta).await?;
 
-    println!();
-    println!(
+    crate::textln!();
+    crate::textln!(
         "  {} Adopted {}",
         s.green.apply_to("✔"),
         s.bold.apply_to(&pkg_name)
     );
-    println!("  {}  {}", s.dim.apply_to("Location:"), dest.display());
-    println!();
+    crate::textln!("  {}  {}", s.dim.apply_to("Location:"), dest.display());
+    crate::textln!();
 
     Ok(())
 }
